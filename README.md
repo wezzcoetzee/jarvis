@@ -128,7 +128,9 @@ Create `~/.config/jarvis/config.json`. Every key is optional:
 | `model` | `sonnet` | The Claude model for `ask` and meeting drafts. |
 | `proxyUrl`, `proxyToken` | none | An optional Anthropic-compatible proxy. Jarvis uses it when it answers, and falls back to Claude Code's own login when it doesn't. If you set a token, `chmod 600` the file. |
 
-Right-click an icon for its own menu: Open, Keep in Dock, Show in Finder, and Hide or Quit for running apps. Pinned apps are saved to `~/.config/jarvis/dock.json` (for example `{"pinned": ["com.google.Chrome", "md.obsidian"]}`) and come first; other running apps follow them. Right-click anywhere else on the Dock for Jarvis's own menu.
+Right-click an icon for its own menu: Open, Keep in Dock, Show in Finder, and Hide or Quit for running apps. Pinned apps are saved to `~/.config/jarvis/dock.json` (for example `{"pinned": ["com.google.Chrome", "md.obsidian"]}`) and come first; other running apps follow them. The first launch fills that file from the apps kept in the macOS Dock. Right-click anywhere else on the Dock for Jarvis's own menu.
+
+Click Downloads to fan out the newest files, like the macOS Dock. Right-click the Trash to empty it; Jarvis asks Finder to do it, so macOS asks once to let Jarvis control Finder.
 
 ### What Jarvis expects in the vault
 
@@ -227,14 +229,16 @@ swift run --package-path dock      # runs the Dock against src/ through bun, wit
 | `src/vault.ts` | Section-aware appends to the daily note, Inbox and Work Log |
 | `src/state.ts` | Seen recordings, the event log and the prompt queue |
 | `dock/Sources/JarvisDock/DockModel.swift` | Capture, search, answers and meeting prompts |
-| `dock/Sources/JarvisDock/DockView.swift` | All Dock UI |
+| `dock/Sources/JarvisDock/DockView.swift` | All Dock UI but the Downloads fan |
 | `dock/Sources/JarvisDock/DockPanel.swift` | The non-activating panel, placement and auto-hide |
 | `dock/Sources/JarvisDock/Jarvis.swift` | CLI bridge and the JSON types |
 | `dock/Sources/JarvisDock/AppShelf.swift` | Pinned and running apps, Downloads and the Trash |
+| `dock/Sources/JarvisDock/DownloadsStack.swift` | The Downloads fan, in a window of its own |
 | `dock/Sources/JarvisDock/Preferences.swift` | Settings, replacing the macOS Dock, open at login |
 | `dock/Sources/JarvisDock/Watcher.swift` | Runs `jarvis watch` while the app is open |
 | `dock/Sources/JarvisDock/HotKey.swift` | ⌥Space via Carbon, which needs no permission |
 | `scripts/package.sh` | Builds the app and the DMG |
+| `scripts/icon.sh` | Rebuilds `assets/AppIcon.icns` from `assets/AppIcon.svg` |
 
 Every animation is a one-shot spring that plays when something changes. The only repeating motion is the "working" dots, which redraw three times a second and only while Claude is working. Nothing runs at the display's refresh rate.
 
