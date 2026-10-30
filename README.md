@@ -4,6 +4,11 @@ A replacement for the macOS Dock with a capture box built in. Press ⌥Space fro
 
 The point is to stop losing things: the "I need to speak to Sam about that" from a call, the decision made in passing, the work you shipped and will want as evidence later. Capturing takes a few keystrokes and you never leave what you're doing.
 
+| | |
+|---|---|
+| ![Find any note as you type](screenshots/framed/search.png) | ![Hand it to Claude](screenshots/framed/working.png) |
+| ![Answers rise out of the Dock](screenshots/framed/answer.png) | ![Meetings become todos](screenshots/framed/meeting.png) |
+
 ## What it does
 
 - **A Dock.** Your running and pinned apps, Downloads and the Trash, on frosted glass, with magnify on hover and the launch bounce. Like the macOS Dock it lives on one display at a time and moves to whichever display you push the pointer against the bottom of. It auto-hides and can replace the macOS Dock while Jarvis runs.
@@ -202,7 +207,7 @@ Everything after `--` is text, so it can start with dashes. Failures print one `
 
 The first `watch` marks every existing recording as seen, so only new meetings prompt.
 
-`JARVIS_VAULT` and `JARVIS_STATE` override the vault and state paths. Use them to test against a copy of your vault.
+`JARVIS_VAULT` and `JARVIS_STATE` override the vault and state paths, for the CLI and the Dock. Use them to test against a copy of your vault.
 
 ## Development
 
@@ -238,6 +243,7 @@ swift run --package-path dock      # runs the Dock against src/ through bun, wit
 | `dock/Sources/JarvisDock/Watcher.swift` | Runs `jarvis watch` while the app is open |
 | `dock/Sources/JarvisDock/HotKey.swift` | ⌥Space via Carbon, which needs no permission |
 | `scripts/package.sh` | Builds the app and the DMG |
+| `scripts/screenshots.sh` | Captures the screenshots above from a demo vault (`JARVIS_DEMO`) |
 | `scripts/icon.sh` | Rebuilds `assets/AppIcon.icns` from `assets/AppIcon.svg` |
 
 Every animation is a one-shot spring that plays when something changes. The only repeating motion is the "working" dots, which redraw three times a second and only while Claude is working. Nothing runs at the display's refresh rate.

@@ -19,7 +19,8 @@ enum Jarvis {
         let json = (try? Data(contentsOf: config)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         return (json?["vault"] as? String).map { URL(filePath: $0).lastPathComponent } ?? "Vault"
     }()
-    static let stateDir = URL(filePath: NSHomeDirectory()).appending(path: ".local/share/jarvis")
+    static let stateDir = ProcessInfo.processInfo.environment["JARVIS_STATE"].map { URL(filePath: $0) }
+        ?? URL(filePath: NSHomeDirectory()).appending(path: ".local/share/jarvis")
     static let pendingDir = stateDir.appending(path: "pending")
 
     struct Failure: LocalizedError {

@@ -322,3 +322,35 @@ final class DockModel {
         }
     }
 }
+
+// MARK: Demo
+
+extension DockModel {
+    /// Seeds one screen for the README screenshots (`JARVIS_DEMO=<screen>`, see scripts/screenshots.sh).
+    /// Search and the meeting prompt are real, against the demo vault and state; Claude's
+    /// progress and answers are canned, since they'd need a live model.
+    func demo(_ screen: String) {
+        switch screen {
+        case "search":
+            requestFocus()
+            query = "launch plan"
+        case "working":
+            var activity = Activity(text: "what did we decide about the launch date?")
+            activity.step = "Reading 2026-10-29"
+            activities = [activity]
+        case "answer":
+            var activity = Activity(text: "what did we decide about the launch date?")
+            activity.state = .done(AskResult(
+                runId: "demo", kind: .found,
+                message: "Launch moves to 12 November",
+                detail: "Decided in Thursday's planning call: ship after the billing migration, with Sam owning the release notes.",
+                notes: [Note(path: "Work Log.md", title: "Work Log"), Note(path: "Meetings/2026-10-29 1057 Slack Huddle.md", title: "2026-10-29 1057 Slack Huddle")],
+                open: nil, changed: []))
+            activities = [activity]
+        case "meeting":
+            open(.meeting)
+        default:
+            break
+        }
+    }
+}
