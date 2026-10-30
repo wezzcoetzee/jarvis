@@ -8,6 +8,14 @@ private final class DockPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
+/// Acts on the first click while another app is active, like the macOS Dock, instead of
+/// spending it on the panel. Clicks on what SwiftUI draws (icons, buttons) leave the panel
+/// unkeyed, so your app keeps the keyboard; AppKit text fields inside still key it.
+final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var needsPanelToBecomeKey: Bool { false }
+}
+
 /// Places the Dock and, like the macOS Dock, keeps it on one display at a time: pushing the
 /// pointer against the bottom edge of another display moves it there. With auto-hide on it
 /// slides in at the bottom edge and slides out when the pointer leaves.
@@ -24,7 +32,11 @@ final class DockPanelController {
     /// Revealed because something arrived; stays up until the pointer has been over it.
     private var sticky = false
     private var hideTimer: Timer?
+    private var shrinkTimer: Timer?
     private var monitors: [Any] = []
+    private let stack = DownloadsStack()
+    /// Keeps an auto-hidden Dock up.
+    private var holding: Bool { model.holdsOpen || stack.isShown }
 
     init(model: DockModel, shelf: AppShelf, preferences: Preferences, openSettings: @escaping () -> Void) {
         self.model = model
@@ -42,10 +54,16 @@ final class DockPanelController {
         panel.acceptsMouseMovedEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
 
-        let hosting = NSHostingView(rootView: DockView(model: model, shelf: shelf, openSettings: openSettings) { [weak self] size in
+        let hosting = FirstClickHostingView(rootView: DockView(model: model, shelf: shelf, openSettings: openSettings) { [weak self] tile in
+            self?.openStack(from: tile)
+        } resize: { [weak self] size in
             self?.resize(to: size)
         })
         panel.contentView = hosting
+        stack.onChange = { [weak self] open in
+            shelf.stackOpen = open
+            if !open { self?.pointerMoved() }
+        }
         size = hosting.fittingSize
         shown = !autohide
         panel.alphaValue = shown ? 1 : 0
@@ -94,7 +112,7 @@ final class DockPanelController {
 
     private func yieldFocus() {
         panel.makeFirstResponder(nil)
-        if autohide, !pointerIsOver, !model.holdsOpen {
+        if autohide, !pointerIsOver, !holding {
             hide()
         } else {
             dropKey()
@@ -135,7 +153,14 @@ final class DockPanelController {
     }
 
     /// Moves the Dock to another display, hidden, ready to come up from that display's edge.
+    /// `tile` is the Downloads tile's frame in the Dock's own coordinates, top-left origin.
+    private func openStack(from tile: CGRect) {
+        let onScreen = CGRect(x: panel.frame.minX + tile.minX, y: panel.frame.maxY - tile.maxY, width: tile.width, height: tile.height)
+        stack.toggle(tile: onScreen, room: screen.visibleFrame.maxY - onScreen.maxY)
+    }
+
     private func place(on newScreen: NSScreen) {
+        stack.close()
         hideTimer?.invalidate()
         panel.orderOut(nil)
         screen = newScreen
@@ -156,7 +181,7 @@ final class DockPanelController {
             return
         }
         guard autohide else { return }
-        if shown, !pointerIsOver, !sticky, !model.holdsOpen {
+        if shown, !pointerIsOver, !sticky, !holding {
             scheduleHide()
         } else {
             hideTimer?.invalidate()
@@ -167,7 +192,7 @@ final class DockPanelController {
         guard hideTimer?.isValid != true else { return }
         hideTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !self.pointerIsOver, !self.sticky, !self.model.holdsOpen else { return }
+                guard let self, !self.pointerIsOver, !self.sticky, !self.holding else { return }
                 self.hide()
             }
         }
@@ -237,15 +262,30 @@ final class DockPanelController {
 
     /// The panel is exactly as big as its content, so it never swallows clicks meant for the
     /// windows behind it.
+    /// Grows at once but shrinks only once the content's spring has settled. The content
+    /// animates to its new size, so a window shrinking straight away would clip the glass of a
+    /// box collapsing or a bubble closing.
     private func resize(to newSize: CGSize) {
         guard newSize.width > 0 else { return }
-        size = newSize
-        panel.setFrame(frame(shown: shown), display: true)
+        shrinkTimer?.invalidate()
+        let grown = CGSize(width: max(size.width, newSize.width), height: max(size.height, newSize.height))
+        if grown != size {
+            size = grown
+            panel.setFrame(frame(shown: shown), display: true)
+        }
+        guard grown != newSize else { return }
+        shrinkTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.size = newSize
+                self.panel.setFrame(self.frame(shown: self.shown), display: true)
+            }
+        }
     }
 
     private func frame(shown: Bool) -> CGRect {
         let bottom = autohide ? screen.frame.minY : screen.visibleFrame.minY
-        let up = CGRect(x: screen.frame.midX - size.width / 2, y: bottom + 2, width: size.width, height: size.height)
+        let up = CGRect(x: screen.frame.midX - size.width / 2, y: bottom, width: size.width, height: size.height)
         if shown { return up }
         // Hidden is just below the display's edge, unless another display is arranged below
         // this one: there the Dock would show up on it, so it only dips and fades out.

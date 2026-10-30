@@ -112,7 +112,10 @@ struct DockView: View {
     @Bindable var model: DockModel
     let shelf: AppShelf
     let openSettings: () -> Void
+    /// Opens or closes the Downloads fan above the tile with this frame.
+    let openStack: (CGRect) -> Void
     let resize: (CGSize) -> Void
+    @State private var downloadsTile = CGRect.zero
 
     var body: some View {
         // Leading, so the sheet and the answer bubble rise out of the box on the left.
@@ -124,12 +127,17 @@ struct DockView: View {
         }
         .font(.system(size: 13))
         .foregroundStyle(.white)
-        .padding(14)
+        .padding([.top, .horizontal], 14)
+        // The panel sits on the screen edge; the tiles reach down through this.
+        .padding(.bottom, AppTile.reach)
         .fixedSize()
         .animation(spring, value: model.showsSheet)
         .animation(spring, value: model.card)
         .animation(spring, value: model.bubble?.id)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { resize($0) }
+        // The window shrinks only after the content has (see DockPanelController.resize), so
+        // until then the content sits on the bottom edge rather than floating in the middle.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
     }
 
     @ViewBuilder private var above: some View {
@@ -147,11 +155,17 @@ struct DockView: View {
     }
 
     private func tiles(_ apps: [DockApp]) -> some View {
-        HStack(spacing: 6) {
+        // No spacing: each tile pads itself, so there's no gap between icons that misses.
+        HStack(spacing: 0) {
             ForEach(apps) { app in
-                AppTile(app: app, bounce: app.id == "md.obsidian" ? model.bounce : 0) { shelf.open(app) }
-                    // The icon's own menu, like the macOS Dock, instead of Jarvis's.
-                    .contextMenu { AppMenu(app: app, shelf: shelf) }
+                AppTile(app: app, bounce: app.id == "md.obsidian" ? model.bounce : 0, closes: app.id == "downloads" && shelf.stackOpen) {
+                    if app.id == "downloads" { openStack(downloadsTile) } else { shelf.open(app) }
+                }
+                // The icon's own menu, like the macOS Dock, instead of Jarvis's.
+                .contextMenu { AppMenu(app: app, shelf: shelf) }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                    if app.id == "downloads" { downloadsTile = $0 }
+                }
             }
         }
     }
@@ -174,14 +188,14 @@ struct DockView: View {
                 divider
             }
             // Line up with the icons, not with the icons plus their running dots.
-            .padding(.bottom, AppTile.dotRow)
+            .padding(.top, 7)
+            .padding(.bottom, 6 + AppTile.dotRow)
             tiles(shelf.apps)
-            divider.padding(.bottom, AppTile.dotRow)
+            divider.padding(.top, 7).padding(.bottom, 6 + AppTile.dotRow)
             tiles(shelf.places)
         }
+        // The tiles carry the bar's vertical padding themselves, so it's clickable.
         .padding(.horizontal, 9)
-        .padding(.top, 7)
-        .padding(.bottom, 6)
         .glass(20)
         .contextMenu {
             Button("Settings…", action: openSettings)
@@ -196,6 +210,11 @@ struct DockView: View {
 
 private struct CapturePill: View {
     @Bindable var model: DockModel
+    @State private var hovering = false
+
+    /// Hovering the resting box previews a click: it widens toward its typing size and the
+    /// pencil tilts as if about to write.
+    private var invites: Bool { hovering && !model.isTyping && !showsStep }
 
     private var icon: String {
         if model.flash != nil { return "checkmark" }
@@ -219,6 +238,8 @@ private struct CapturePill: View {
         HStack(spacing: 8) {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .semibold))
+                .rotationEffect(.degrees(invites ? -18 : 0))
+                .offset(x: invites ? -1 : 0, y: invites ? -2 : 0)
                 .contentTransition(.symbolEffect(.replace))
                 // One hop per new step; nothing moves between steps.
                 .symbolEffect(.bounce, value: model.working.first?.step)
@@ -226,11 +247,13 @@ private struct CapturePill: View {
                 text: $model.query,
                 placeholder: placeholder,
                 focusCount: model.captureFocus,
-                onFocus: { model.isTyping = true },
+                // Opening the meeting card also makes the panel key; that isn't typing.
+                onFocus: { if model.card == nil { model.isTyping = true } },
                 onMove: model.move,
                 onSubmit: model.submit,
                 onCancel: model.cancel
             )
+            .offset(x: invites ? 3 : 0)
             .overlay(alignment: .leading) {
                 if showsStep {
                     // Each new step rolls up into place, like a departures board.
@@ -249,15 +272,17 @@ private struct CapturePill: View {
                 if let oldest = model.working.first {
                     WorkingBeat(started: oldest.started)
                 } else {
-                    Text("⌥Space").font(.system(size: 11)).foregroundStyle(Color.secondary)
+                    Text("⌥Space").font(.system(size: 11)).foregroundStyle(invites ? Color.white.opacity(0.85) : Color.secondary)
                 }
             }
         }
         .padding(.horizontal, 14)
         // Grows to make room for typing, and for the step text while Claude works.
-        .frame(width: model.isTyping ? 300 : showsStep ? 330 : 190)
+        .frame(width: model.isTyping ? 300 : showsStep ? 330 : invites ? 220 : 190)
         .capsule(model.isTyping || showsStep ? .pillActive : .pill)
         .onTapGesture { model.requestFocus() }
+        .onHover { hovering = $0 }
+        .animation(spring, value: invites)
         .animation(spring, value: model.isTyping)
         .animation(spring, value: showsStep)
     }
@@ -518,6 +543,16 @@ private struct AppMenu: View {
     let shelf: AppShelf
 
     var body: some View {
+        if app.id == "trash" {
+            Button("Open") { shelf.open(app) }
+            Divider()
+            Button("Empty Trash") { shelf.emptyTrash() }.disabled(shelf.trashFull != true)
+        } else {
+            menu
+        }
+    }
+
+    @ViewBuilder private var menu: some View {
         Text(app.name)
         Divider()
         if app.running == nil || !app.isApp { Button("Open") { shelf.open(app) } }
@@ -538,17 +573,20 @@ private struct AppMenu: View {
 private struct AppTile: View {
     let app: DockApp
     let bounce: Int
+    /// The Downloads tile while its fan is open: a button that closes it, as in the macOS Dock.
+    var closes = false
     let action: () -> Void
     @State private var hovering = false
     @State private var lift: CGFloat = 0
 
     /// Room under each icon for its running dot, so the dot never sits on the Dock's edge.
     static let dotRow: CGFloat = 8
+    /// From the bottom of the bar down to the screen edge.
+    static let reach: CGFloat = 16
 
     var body: some View {
         VStack(spacing: 4) {
-            Image(nsImage: app.icon)
-                .resizable()
+            icon
                 .frame(width: 46, height: 46)
                 .scaleEffect(hovering ? 1.16 : 1, anchor: .bottom)
                 .offset(y: (hovering ? -5 : 0) + lift)
@@ -557,6 +595,16 @@ private struct AppTile: View {
                 .fill(Color.white.opacity(app.running == nil ? 0 : 0.8))
                 .frame(width: 4, height: 4)
         }
+        // Like the macOS Dock, the whole column is the target: the gaps beside the icon, the
+        // bar's padding and the strip below the bar, down to the screen edge. The window
+        // server passes clicks on fully clear pixels to the window behind, so the column
+        // carries a fill too faint to see.
+        .padding(.horizontal, 3)
+        .padding(.top, 7)
+        .padding(.bottom, 6 + Self.reach)
+        .background(Color.black.opacity(0.01))
+        .contentShape(Rectangle())
+        .padding(.bottom, -Self.reach)
         .onHover { hovering = $0 }
         .onTapGesture {
             if app.running == nil, app.isApp { hop() }
@@ -564,6 +612,26 @@ private struct AppTile: View {
         }
         .onChange(of: bounce) { hop() }
         .help(app.name)
+    }
+
+    /// The Downloads tile crossfades between its file and the close button as the fan moves.
+    private var icon: some View {
+        face
+            .id(closes)
+            .transition(.opacity.combined(with: .scale(scale: 0.8)))
+            .animation(.easeOut(duration: 0.18), value: closes)
+    }
+
+    @ViewBuilder private var face: some View {
+        if closes {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(white: 0.12).opacity(0.9))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.white.opacity(0.18)))
+                .overlay(Image(systemName: "chevron.down").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white))
+                .padding(4)
+        } else {
+            Image(nsImage: app.icon).resizable()
+        }
     }
 
     /// The Dock's launch bounce, played once.
@@ -587,6 +655,26 @@ private struct CaptureField: NSViewRepresentable {
 
     final class Field: NSTextField {
         var onFocus: () -> Void = {}
+        private var keyObserver: NSObjectProtocol?
+
+        /// AppKit hands the field focus as soon as the panel appears, before it's key. A click on
+        /// the field then only makes the panel key, so focus never changes again. So a click on
+        /// the field that makes the panel key counts as typing. Only that click: other things
+        /// make the panel key too, and ⌥Space marks typing itself.
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let keyObserver { NotificationCenter.default.removeObserver(keyObserver) }
+            keyObserver = window.map { window in
+                NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self, self.currentEditor() != nil, let click = NSApp.currentEvent,
+                              click.type == .leftMouseDown, click.window === self.window,
+                              self.bounds.contains(self.convert(click.locationInWindow, from: nil)) else { return }
+                        self.onFocus()
+                    }
+                }
+            }
+        }
 
         /// Only counts once the panel is key: AppKit also hands the field focus when the window
         /// first appears, and that would hold an auto-hidden Dock open.
