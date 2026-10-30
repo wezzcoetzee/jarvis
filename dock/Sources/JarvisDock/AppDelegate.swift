@@ -21,9 +21,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         terminate.setEventHandler { NSApp.terminate(nil) }
         terminate.resume()
         terminateSignal = terminate
-        if preferences.replaceSystemDock { SystemDock.replace() }
+        // Demo mode (scripts/screenshots.sh) leaves the macOS Dock and the watcher alone.
+        let demo = ProcessInfo.processInfo.environment["JARVIS_DEMO"]
+        if demo == nil, preferences.replaceSystemDock { SystemDock.replace() }
         NSApp.mainMenu = Self.editMenu()
-        watcher.start()
+        if demo == nil { watcher.start() }
 
         let panel = DockPanelController(model: model, shelf: shelf, preferences: preferences) { [weak self] in
             self?.settings.show()
@@ -36,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.start()
         shelf.start()
         panel.show()
+        if let demo { model.demo(demo) }
     }
 
     /// Jarvis shows no menu bar, but the menu still gives every text field the standard editing
@@ -60,6 +63,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Never leave you without a Dock: the macOS one comes back whenever Jarvis quits.
     func applicationWillTerminate(_ notification: Notification) {
         watcher.stop()
-        if preferences.replaceSystemDock { SystemDock.restore() }
+        if ProcessInfo.processInfo.environment["JARVIS_DEMO"] == nil, preferences.replaceSystemDock { SystemDock.restore() }
     }
 }
