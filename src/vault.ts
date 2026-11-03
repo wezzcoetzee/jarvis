@@ -1,13 +1,14 @@
-import { rename } from "node:fs/promises";
 import { join } from "node:path";
 import { layout, paths } from "./config";
+import { readText, writeAtomic } from "./files";
 
 const PLACEHOLDER = "_(nothing yet)_";
 
 function sectionBounds(lines: string[], heading: string): [number, number] | null {
   const start = lines.findIndex((l) => l.trim() === heading);
   if (start === -1) return null;
-  const next = lines.findIndex((l, i) => i > start && l.startsWith("## "));
+  // The section ends at the next heading of the same level or above.
+  const next = lines.findIndex((l, i) => i > start && /^#{1,2} /.test(l));
   return [start, next === -1 ? lines.length : next];
 }
 
@@ -42,13 +43,10 @@ export function insertInSection(
   return [...lines.slice(0, start + 1), ...body, ...lines.slice(end)].join("\n");
 }
 
-async function readOrNull(path: string): Promise<string | null> {
-  const file = Bun.file(path);
-  return (await file.exists()) ? file.text() : null;
-}
-
+/** The day as `YYYY-MM-DD` in local time, which is how daily notes are named. */
+export const localDate = (d = new Date()) => d.toLocaleDateString("en-CA");
 export const dailyPath = (date: string) => join(paths.daily, `${date}.md`);
-export const readDaily = (date: string) => readOrNull(dailyPath(date));
+export const readDaily = (date: string) => readText(dailyPath(date));
 
 /** A planned edit. Plan everything first, then commit, so a failure never leaves half a capture. */
 export type Write = { path: string; label: string; content: string };
@@ -64,28 +62,25 @@ export async function planTodos(todos: string[], { today, link, inboxOnly = fals
     daily && insertInSection(daily, "## Todo", todos.map((t) => `- [ ] ${t}${link ? ` (${link})` : ""}`), "end");
   if (updated) return { path: dailyPath(today), label: `${layout.daily}/${today}.md`, content: updated };
 
-  const inbox = (await readOrNull(paths.inbox)) ?? "# Inbox\n\n## Items\n";
+  const inbox = (await readText(paths.inbox)) ?? "# Inbox\n";
   const lines = todos.map((t) => `- ${today} — ${t}${/[.!?]$/.test(t) ? "" : "."}${link ? ` ${link}` : ""}`);
-  const content = insertInSection(inbox, "## Items", lines, "end") ?? `${inbox}\n${lines.join("\n")}\n`;
+  const content = insertInSection(inbox, "## Items", lines, "end") ?? `${inbox}${inbox.endsWith("\n") ? "" : "\n"}\n## Items\n\n${lines.join("\n")}\n`;
   return { path: paths.inbox, label: layout.inbox, content };
 }
 
 /** Decisions go on top of the Work Log, newest first, as `- date · #decision · text · [[note]]`. */
 export async function planDecisions(decisions: string[], meetingDate: string, noteName: string): Promise<Write | null> {
   if (decisions.length === 0) return null;
-  const log = await readOrNull(paths.workLog);
+  const log = await readText(paths.workLog);
   const lines = decisions.map((d) => `- ${meetingDate} · #decision · ${d} · [[${noteName}]]`);
   const updated = log && insertInSection(log, "## Entries", lines, "start");
   if (!updated) throw new Error(`${layout.workLog} has no \`## Entries\` section`);
   return { path: paths.workLog, label: layout.workLog, content: updated };
 }
 
-/** Writes each file via a temp file and rename, so Obsidian or a skill never reads a half-written note. */
+/** Writes each planned edit atomically. Returns what it wrote, as the vault names it. */
 export async function commit(writes: (Write | null)[]): Promise<string[]> {
   const planned = writes.filter((w) => w !== null);
-  for (const { path, content } of planned) {
-    await Bun.write(`${path}.jarvis-tmp`, content);
-    await rename(`${path}.jarvis-tmp`, path);
-  }
+  for (const { path, content } of planned) await writeAtomic(path, content);
   return planned.map((w) => w.label);
 }

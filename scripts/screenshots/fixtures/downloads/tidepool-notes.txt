@@ -1,0 +1,3 @@
+Tidepool release notes
+
+0.3: offline tide tables

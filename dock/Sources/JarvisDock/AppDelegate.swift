@@ -4,8 +4,8 @@ import Carbon.HIToolbox
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let model = DockModel()
-    private let shelf = AppShelf()
-    private let preferences = Preferences()
+    private let shelf = AppShelf(showsRunning: Screenshots.scene == nil)
+    private let preferences = Preferences(defaults: Screenshots.scene == nil ? .standard : Screenshots.defaults())
     private let watcher = Watcher()
     private lazy var settings = SettingsWindow(preferences: preferences)
     private var panel: DockPanelController?
@@ -21,24 +21,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         terminate.setEventHandler { NSApp.terminate(nil) }
         terminate.resume()
         terminateSignal = terminate
-        // Demo mode (scripts/screenshots.sh) leaves the macOS Dock and the watcher alone.
-        let demo = ProcessInfo.processInfo.environment["JARVIS_DEMO"]
-        if demo == nil, preferences.replaceSystemDock { SystemDock.replace() }
+        if preferences.replaceSystemDock { SystemDock.replace() }
         NSApp.mainMenu = Self.editMenu()
-        if demo == nil { watcher.start() }
 
         let panel = DockPanelController(model: model, shelf: shelf, preferences: preferences) { [weak self] in
             self?.settings.show()
         }
         self.panel = panel
+        model.start()
+        shelf.start()
+        panel.show()
+
+        if let scene = Screenshots.scene {
+            Task { await Screenshots(scene: scene, model: model, dock: panel, settings: settings).run() }
+            return
+        }
+        watcher.start()
         hotKey = HotKey(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey)) { [weak panel] in
             panel?.focus()
         }
         if hotKey == nil { NSLog("Jarvis: couldn't register ⌥Space, another app may own it") }
-        model.start()
-        shelf.start()
-        panel.show()
-        if let demo { model.demo(demo) }
     }
 
     /// Jarvis shows no menu bar, but the menu still gives every text field the standard editing
@@ -63,6 +65,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Never leave you without a Dock: the macOS one comes back whenever Jarvis quits.
     func applicationWillTerminate(_ notification: Notification) {
         watcher.stop()
-        if ProcessInfo.processInfo.environment["JARVIS_DEMO"] == nil, preferences.replaceSystemDock { SystemDock.restore() }
+        if preferences.replaceSystemDock { SystemDock.restore() }
     }
 }

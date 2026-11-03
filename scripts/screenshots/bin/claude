@@ -1,0 +1,106 @@
+#!/usr/bin/env bun
+// A stand-in for `claude -p`, first on PATH while scripts/screenshots.sh runs. The real CLI
+// spawns it, so `jarvis ask`, the hook, run manifests and undo all run for real; only the model
+// is canned. It answers the requests in dock/Sources/JarvisDock/Screenshots.swift.
+import { appendFile } from "node:fs/promises";
+import { join } from "node:path";
+
+type Step = [tool: string, input: Record<string, unknown>];
+type Reply = {
+  steps: Step[];
+  answer?: Record<string, unknown>;
+  /** Appends this line to today's daily note, through the hook, as Claude's Edit would. */
+  edit?: string;
+  error?: string;
+  /** Keeps working, for the scenes that show progress. */
+  hang?: boolean;
+};
+
+const today = new Date().toLocaleDateString("en-CA");
+const daily = `Daily/${today}.md`;
+
+const replies: [match: RegExp, reply: Reply][] = [
+  [/shed roof/, { steps: [["Skill", { skill: "vault-find" }], ["Grep", { pattern: "shed roof" }]], hang: true }],
+  [/plumber/, { steps: [["Read", { file_path: "Daily/2026-10-30.md" }]], hang: true }],
+  [/cedar boards/, {
+    steps: [["Skill", { skill: "vault-add" }], ["Read", { file_path: daily }], ["Edit", { file_path: daily }]],
+    edit: "- [ ] Fri: order cedar boards for the shed",
+    answer: {
+      kind: "saved",
+      message: "Added a todo for Friday to order the cedar boards",
+      detail: "",
+      notes: [{ path: daily, title: today }],
+      open: null,
+    },
+  }],
+  [/Lisbon/, {
+    steps: [["Glob", { pattern: "**/*Lisbon*" }], ["Read", { file_path: "Projects/Lisbon trip.md" }]],
+    answer: {
+      kind: "found",
+      message: "Two notes on the Lisbon trip",
+      detail: "The plan and bookings are in Lisbon trip. Flights still need booking.",
+      notes: [
+        { path: "Projects/Lisbon trip.md", title: "Lisbon trip" },
+        { path: "Projects/Lisbon packing list.md", title: "Lisbon packing list" },
+      ],
+      open: null,
+    },
+  }],
+  [/left on the shed/, {
+    steps: [["Read", { file_path: "Projects/Garden shed.md" }]],
+    answer: {
+      kind: "answer",
+      message: "Three jobs left on the shed",
+      detail: "- Roof: pent, felt over OSB (felt agreed with Sam)\n- Cedar cladding, 40 boards to order\n- Door and hinges",
+      notes: [{ path: "Projects/Garden shed.md", title: "Garden shed" }],
+      open: null,
+    },
+  }],
+  [/dentist/, {
+    steps: [["Grep", { pattern: "dentist" }]],
+    answer: {
+      kind: "question",
+      message: "Move the dentist to which day?",
+      detail: "The reminder letter is in your 30 October note, but it doesn't say when the appointment is.",
+      notes: [],
+      open: null,
+    },
+  }],
+  [/Taberna/, { steps: [], error: "API Error: 529 Overloaded. The model is busy, try again in a moment." }],
+];
+
+const args = Bun.argv.slice(2);
+const prompt = await Bun.stdin.text();
+const request = prompt.match(/<request>\n([\s\S]*)\n<\/request>/)?.[1] ?? "";
+const reply = replies.find(([match]) => match.test(request))?.[1];
+if (!reply) {
+  console.error(`The stand-in claude has no reply for: ${request}`);
+  process.exit(1);
+}
+
+const emit = (event: unknown) => console.log(JSON.stringify(event));
+for (const [name, input] of reply.steps) {
+  emit({ type: "assistant", message: { content: [{ type: "tool_use", name, input }] } });
+  await Bun.sleep(150);
+}
+
+if (reply.edit) {
+  // The command `jarvis ask` installed as its PreToolUse hook, with the payload Claude Code sends.
+  const settings = JSON.parse(args[args.indexOf("--settings") + 1] ?? "{}");
+  const command: string = settings.hooks.PreToolUse[0].hooks[0].command;
+  const file = join(process.cwd(), daily);
+  const hook = Bun.spawn(["sh", "-c", command], {
+    stdin: new Response(JSON.stringify({ tool_name: "Edit", tool_input: { file_path: file } })),
+    stderr: "inherit",
+  });
+  if ((await hook.exited) !== 0) process.exit(1);
+  await appendFile(file, `${reply.edit}\n`);
+}
+
+if (reply.hang) await Bun.sleep(60_000);
+if (reply.error) {
+  console.error(reply.error);
+  process.exit(1);
+}
+emit({ type: "assistant", message: { content: [{ type: "tool_use", name: "StructuredOutput", input: {} }] } });
+emit({ type: "result", is_error: false, structured_output: reply.answer });

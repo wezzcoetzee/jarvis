@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stands in for osascript while scripts/screenshots.sh runs, so `jarvis ask` can never read the
+# tab of whatever browser is really in front. It fails, which ask takes as "no tab".
+exit 1

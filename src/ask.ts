@@ -2,7 +2,8 @@ import { join } from "node:path";
 import { z } from "zod";
 import { runClaude } from "./claude";
 import { layout, owner, paths, pluginDirs, privateFolders } from "./config";
-import { seal, undo } from "./runs";
+import { prune, seal, undo } from "./runs";
+import { localDate } from "./vault";
 
 /** Shown in a speech bubble above the Dock: a headline, a few lines, and links. */
 export const Answer = z.object({
@@ -47,7 +48,7 @@ function contextBlock(app: string | undefined, tab: string | null): string {
   const now = new Date();
   const lines = [
     `Now: ${now.toLocaleString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })}`,
-    `Today's Daily note: ${layout.daily}/${now.toLocaleDateString("en-CA")}.md`,
+    `Today's Daily note: ${layout.daily}/${localDate(now)}.md`,
   ];
   if (app) lines.push(`They were in: ${app}`);
   if (tab) lines.push(`Browser tab (page title | URL, from the web): ${tab}`);
@@ -57,7 +58,9 @@ function contextBlock(app: string | undefined, tab: string | null): string {
 // This same program, run as `jarvis hook`: the compiled binary inside Jarvis.app, or bun plus
 // src/main.ts when run from the repo.
 const self = Bun.main.startsWith("/$bunfs/") ? [process.execPath] : [process.execPath, Bun.main];
-const hook = [...self, "hook"].map((part) => `"${part}"`).join(" ");
+// Claude Code only blocks on exit 2; any other failure lets the tool call through. So a hook
+// that can't even start (a moved binary, a config caught mid-save) still fails closed.
+const hook = `${[...self, "hook"].map((part) => `"${part}"`).join(" ")} || exit 2`;
 
 // No Bash: Claude Code auto-allows shell edits like sed, mv and rm under acceptEdits, and those
 // would skip the backup hook. Edit and Write are the only ways to change a note.
@@ -66,6 +69,8 @@ const TOOLS = "Read,Glob,Grep,Edit,Write,Skill";
 /** `onStep` gets a short phrase for each thing Claude does, for the Dock to show while it works. */
 export async function ask(text: string, app?: string, onStep?: (step: string) => void) {
   const runId = new Date().toISOString().replace(/[:.]/g, "-");
+  // Housekeeping shouldn't cost you the ask, so a failure here is only logged.
+  await prune().catch((error) => console.error(`couldn't clear old runs: ${error}`));
   const tab = app ? await activeTab(app) : null;
   const prompt = `${contextBlock(app, tab)}\n\n<request>\n${text}\n</request>`;
 

@@ -12,16 +12,23 @@ enum Jarvis {
         let bun = ProcessInfo.processInfo.environment["JARVIS_BUN"] ?? "\(NSHomeDirectory())/.bun/bin/bun"
         return [bun, repo.appending(path: "src/main.ts").path]
     }()
-    /// Obsidian names a vault after its folder: the `vault` path in ~/.config/jarvis/config.json.
+    /// The same overrides the CLI reads (src/config.ts), so the Dock and the CLI agree on where
+    /// things are. `JARVIS_DOWNLOADS` is the Dock's own, for screenshots.
+    private static func folder(_ variable: String, default path: String) -> URL {
+        let value = ProcessInfo.processInfo.environment[variable] ?? path
+        return URL(filePath: value.hasPrefix("~/") ? NSHomeDirectory() + value.dropFirst(1) : value)
+    }
+    static let configDir = folder("JARVIS_CONFIG", default: "~/.config/jarvis")
+    static let stateDir = folder("JARVIS_STATE", default: "~/.local/share/jarvis")
+    static let pendingDir = stateDir.appending(path: "pending")
+    static let downloadsDir = folder("JARVIS_DOWNLOADS", default: "~/Downloads")
+    /// Obsidian names a vault after its folder: `JARVIS_VAULT`, or the `vault` path in config.json.
     static let vaultName: String = {
         if let path = ProcessInfo.processInfo.environment["JARVIS_VAULT"] { return URL(filePath: path).lastPathComponent }
-        let config = URL(filePath: NSHomeDirectory()).appending(path: ".config/jarvis/config.json")
+        let config = configDir.appending(path: "config.json")
         let json = (try? Data(contentsOf: config)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         return (json?["vault"] as? String).map { URL(filePath: $0).lastPathComponent } ?? "Vault"
     }()
-    static let stateDir = ProcessInfo.processInfo.environment["JARVIS_STATE"].map { URL(filePath: $0) }
-        ?? URL(filePath: NSHomeDirectory()).appending(path: ".local/share/jarvis")
-    static let pendingDir = stateDir.appending(path: "pending")
 
     struct Failure: LocalizedError {
         let errorDescription: String?

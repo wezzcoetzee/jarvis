@@ -1,0 +1,9 @@
+{
+  "noteName": "2026-11-03 0915 Zoom",
+  "meetingDate": "2026-11-03",
+  "proposal": {
+    "title": "Zoom with Maya",
+    "followUps": [{ "task": "Tonight: book the Lisbon flights", "alreadyTracked": false }],
+    "decisions": ["Alfama on the first day in Lisbon"]
+  }
+}

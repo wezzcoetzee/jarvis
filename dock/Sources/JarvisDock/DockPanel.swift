@@ -34,6 +34,8 @@ final class DockPanelController {
     private var hideTimer: Timer?
     private var shrinkTimer: Timer?
     private var monitors: [Any] = []
+    /// Where DockView last laid out each icon, in the panel, top-left origin.
+    private var places: [String: CGRect] = [:]
     private let stack = DownloadsStack()
     /// Keeps an auto-hidden Dock up.
     private var holding: Bool { model.holdsOpen || stack.isShown }
@@ -54,8 +56,10 @@ final class DockPanelController {
         panel.acceptsMouseMovedEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
 
-        let hosting = FirstClickHostingView(rootView: DockView(model: model, shelf: shelf, openSettings: openSettings) { [weak self] tile in
-            self?.openStack(from: tile)
+        let hosting = FirstClickHostingView(rootView: DockView(model: model, shelf: shelf, openSettings: openSettings) { [weak self] in
+            self?.openStack()
+        } placed: { [weak self] id, frame in
+            self?.places[id] = frame
         } resize: { [weak self] size in
             self?.resize(to: size)
         })
@@ -68,6 +72,7 @@ final class DockPanelController {
         shown = !autohide
         panel.alphaValue = shown ? 1 : 0
         panel.setFrame(frame(shown: shown), display: true)
+        passClicksThrough()
 
         model.onNeedsKey = { [weak self] in self?.focusPanel() }
         model.onFinish = { [weak self] in self?.yieldFocus() }
@@ -129,7 +134,21 @@ final class DockPanelController {
 
     // MARK: Displays and auto-hide
 
-    private var pointerIsOver: Bool { shown && panel.frame.insetBy(dx: -6, dy: -6).contains(NSEvent.mouseLocation) }
+    /// The Dock's window, for screenshots.
+    var window: NSWindow { panel }
+
+    /// What SwiftUI draws: centred in the full-width panel, sitting on its bottom edge.
+    var contentFrame: CGRect {
+        CGRect(x: panel.frame.midX - size.width / 2, y: panel.frame.minY, width: size.width, height: size.height)
+    }
+
+    private var pointerIsOver: Bool { shown && contentFrame.insetBy(dx: -6, dy: -6).contains(NSEvent.mouseLocation) }
+
+    /// The panel is wider than the Dock, so the empty sides let clicks fall through to the
+    /// windows behind it.
+    private func passClicksThrough() {
+        panel.ignoresMouseEvents = !contentFrame.insetBy(dx: -6, dy: -6).contains(NSEvent.mouseLocation)
+    }
 
     /// The display under `point`. Bottom edges count as inside, top edges don't, so a pointer on
     /// the line between two stacked displays belongs to the upper one.
@@ -152,13 +171,17 @@ final class DockPanelController {
         panel.setFrame(frame(shown: shown), display: true)
     }
 
-    /// Moves the Dock to another display, hidden, ready to come up from that display's edge.
-    /// `tile` is the Downloads tile's frame in the Dock's own coordinates, top-left origin.
-    private func openStack(from tile: CGRect) {
-        let onScreen = CGRect(x: panel.frame.minX + tile.minX, y: panel.frame.maxY - tile.maxY, width: tile.width, height: tile.height)
-        stack.toggle(tile: onScreen, room: screen.visibleFrame.maxY - onScreen.maxY)
+    /// Where an icon (by app id) or the box ("capture") is on screen.
+    func screenFrame(of id: String) -> CGRect? {
+        places[id].map { CGRect(x: panel.frame.minX + $0.minX, y: panel.frame.maxY - $0.maxY, width: $0.width, height: $0.height) }
     }
 
+    private func openStack() {
+        guard let tile = screenFrame(of: "downloads") else { return }
+        stack.toggle(tile: tile, room: screen.visibleFrame.maxY - tile.maxY)
+    }
+
+    /// Moves the Dock to another display, hidden, ready to come up from that display's edge.
     private func place(on newScreen: NSScreen) {
         stack.close()
         hideTimer?.invalidate()
@@ -171,6 +194,7 @@ final class DockPanelController {
 
     private func pointerMoved() {
         let pointer = NSEvent.mouseLocation
+        passClicksThrough()
         if pointerIsOver { sticky = false }
 
         // Pushing against the bottom of any display brings the Dock up there.
@@ -260,32 +284,33 @@ final class DockPanelController {
 
     // MARK: Placement
 
-    /// The panel is exactly as big as its content, so it never swallows clicks meant for the
-    /// windows behind it.
-    /// Grows at once but shrinks only once the content's spring has settled. The content
-    /// animates to its new size, so a window shrinking straight away would clip the glass of a
-    /// box collapsing or a bubble closing.
+    /// The panel spans the display's width, so the bar widening (hovering or typing in the box)
+    /// never moves the window under a spring that's still running. Only its height follows the
+    /// content: it grows at once but shrinks only once the content's spring has settled, since
+    /// a window shrinking straight away would clip the glass of a sheet or bubble closing.
     private func resize(to newSize: CGSize) {
         guard newSize.width > 0 else { return }
         shrinkTimer?.invalidate()
         let grown = CGSize(width: max(size.width, newSize.width), height: max(size.height, newSize.height))
         if grown != size {
             size = grown
-            panel.setFrame(frame(shown: shown), display: true)
+            if panel.frame.height != size.height { panel.setFrame(frame(shown: shown), display: true) }
+            passClicksThrough()
         }
         guard grown != newSize else { return }
         shrinkTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.size = newSize
-                self.panel.setFrame(self.frame(shown: self.shown), display: true)
+                if self.panel.frame.height != newSize.height { self.panel.setFrame(self.frame(shown: self.shown), display: true) }
+                self.passClicksThrough()
             }
         }
     }
 
     private func frame(shown: Bool) -> CGRect {
         let bottom = autohide ? screen.frame.minY : screen.visibleFrame.minY
-        let up = CGRect(x: screen.frame.midX - size.width / 2, y: bottom, width: size.width, height: size.height)
+        let up = CGRect(x: screen.frame.minX, y: bottom, width: screen.frame.width, height: size.height)
         if shown { return up }
         // Hidden is just below the display's edge, unless another display is arranged below
         // this one: there the Dock would show up on it, so it only dips and fades out.

@@ -5,7 +5,7 @@ import SwiftUI
 
 @MainActor @Observable
 final class Preferences {
-    @ObservationIgnored private let defaults = UserDefaults.standard
+    @ObservationIgnored private let defaults: UserDefaults
 
     var autoHide: Bool {
         didSet { defaults.set(autoHide, forKey: "autoHide") }
@@ -30,7 +30,8 @@ final class Preferences {
         }
     }
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         // First launch copies the system Dock's auto-hide, and opens at login so the meeting
         // watcher is always running.
         let systemAutoHide = UserDefaults(suiteName: "com.apple.dock")?.bool(forKey: "autohide") ?? false
@@ -106,7 +107,7 @@ final class SettingsWindow {
         self.preferences = preferences
     }
 
-    func show() {
+    @discardableResult func show() -> NSWindow {
         if window == nil {
             let window = NSWindow(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = "Jarvis"
@@ -116,7 +117,8 @@ final class SettingsWindow {
             self.window = window
         }
         NSApp.activate()
-        window?.makeKeyAndOrderFront(nil)
+        window!.makeKeyAndOrderFront(nil)
+        return window!
     }
 }
 
