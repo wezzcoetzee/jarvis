@@ -48,8 +48,9 @@ const noteName = (path: unknown) => clip(basename(String(path ?? ""), ".md"), 40
 export function describeStep(tool: string, input: Record<string, unknown>): string {
   switch (tool) {
     case "Read": return `Reading ${noteName(input.file_path)}`;
-    case "Grep": return `Searching for “${clip(String(input.pattern ?? ""), 30)}”`;
-    case "Glob": return `Looking through ${clip(String(input.pattern ?? "notes"), 30)}`;
+    // Clipped so the whole step fits the box beside the timer.
+    case "Grep": return `Searching for “${clip(String(input.pattern ?? ""), 21)}”`;
+    case "Glob": return `Looking through ${clip(String(input.pattern ?? "notes"), 21)}`;
     case "Edit":
     case "MultiEdit": return `Updating ${noteName(input.file_path)}`;
     case "Write": return `Writing ${noteName(input.file_path)}`;
@@ -58,6 +59,15 @@ export function describeStep(tool: string, input: Record<string, unknown>): stri
     default: return clip(tool, 30);
   }
 }
+
+/** The parts of Claude Code's JSON output Jarvis reads: tool calls as they happen, then the result. */
+type Event = {
+  type?: string;
+  message?: { content?: { type: string; name: string; input?: Record<string, unknown> }[] };
+  is_error?: boolean;
+  result?: string;
+  structured_output?: unknown;
+};
 
 /** Runs `claude -p` and returns its structured output, validated against `schema`. */
 export async function runClaude<T extends z.ZodType>(
@@ -88,7 +98,7 @@ export async function runClaude<T extends z.ZodType>(
     },
   );
 
-  let result: { is_error?: boolean; result?: string; structured_output?: unknown } | undefined;
+  let result: Event | undefined;
   const readEvents = async () => {
     let buffer = "";
     const decoder = new TextDecoder();
@@ -100,10 +110,16 @@ export async function runClaude<T extends z.ZodType>(
     }
     handle(buffer);
   };
-  // Claude Code can print a warning line (e.g. about connectors) before any JSON.
+  // Claude Code can print a warning line (e.g. about connectors) before any JSON, and a run
+  // killed by the timeout can end mid-line. Skip both, so the error says how it ended.
   const handle = (line: string) => {
     if (!line.trim().startsWith("{")) return;
-    const event = JSON.parse(line);
+    let event: Event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      return;
+    }
     if (event.type === "result" || !onStep) result = event;
     if (event.type === "assistant") {
       for (const item of event.message?.content ?? []) {

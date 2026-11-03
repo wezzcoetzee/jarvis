@@ -1,0 +1,13 @@
+{
+  "noteName": "2026-11-02 1430 FaceTime",
+  "meetingDate": "2026-11-02",
+  "proposal": {
+    "title": "FaceTime with Sam",
+    "followUps": [
+      { "task": "Tonight: send Sam the shed roof plan", "alreadyTracked": false },
+      { "task": "Sat: pick up the ladder from Sam", "alreadyTracked": false },
+      { "task": "Order cedar boards for the shed roof", "alreadyTracked": true }
+    ],
+    "decisions": ["Felt for the shed roof rather than shingles: half the price"]
+  }
+}

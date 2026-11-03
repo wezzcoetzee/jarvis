@@ -1,11 +1,6 @@
 import AppKit
 import Observation
 
-/// A card you opened above the Dock. Answers aren't cards: they bubble up on their own.
-enum Card: Equatable {
-    case meeting
-}
-
 @MainActor @Observable
 final class DockModel {
     var query = "" {
@@ -20,9 +15,12 @@ final class DockModel {
     var isTyping = false
     private(set) var flash: String?
     private(set) var pending: [Pending] = []
-    var lines: [DraftLine] = []
+    /// Your edits to each queued prompt, kept until it's saved or skipped, so a failed save or
+    /// another prompt arriving never throws them away.
+    private var drafts: [Pending.ID: [DraftLine]] = [:]
     private(set) var activities: [Activity] = []
-    private(set) var card: Card?
+    /// The meeting prompt is open above the Dock. Answers aren't opened: they bubble up on their own.
+    private(set) var reviewOpen = false
     private(set) var captureFocus = 0
     private(set) var promptFocus = 0
     /// Bumped on every save, to bounce the Obsidian icon.
@@ -38,19 +36,26 @@ final class DockModel {
     @ObservationIgnored private var writes: Task<Void, Never>?
     /// Prompts being saved or skipped: already gone from the UI, still on disk until the CLI finishes.
     @ObservationIgnored private var resolving: Set<String> = []
+    /// Answers whose undo is under way, so a double click can't run it twice.
+    @ObservationIgnored private var undoing: Set<Activity.ID> = []
     @ObservationIgnored private var pendingWatcher: DispatchSourceFileSystemObject?
 
     var reviewing: Pending? { pending.first }
+    /// The open prompt's lines.
+    var lines: [DraftLine] {
+        get { reviewing.flatMap { drafts[$0.id] } ?? [] }
+        set { if let id = reviewing?.id { drafts[id] = newValue } }
+    }
     var trimmedQuery: String { query.trimmingCharacters(in: .whitespaces) }
-    var showsSheet: Bool { isTyping && !trimmedQuery.isEmpty && card == nil }
+    var showsSheet: Bool { isTyping && !trimmedQuery.isEmpty && !reviewOpen }
     /// Requests Claude is still working on, shown as a timer in the box.
     var working: [Activity] { activities.filter(\.isRunning) }
     /// Finished requests, oldest first. The bubble shows the first; the rest wait their turn.
     var answers: [Activity] { activities.filter { !$0.isRunning } }
-    var bubble: Activity? { card == nil && !showsSheet ? answers.first : nil }
-    /// While true, an auto-hidden Dock stays up: typing, a card open, Claude still working, or
+    var bubble: Activity? { !reviewOpen && !showsSheet ? answers.first : nil }
+    /// While true, an auto-hidden Dock stays up: typing, a prompt open, Claude still working, or
     /// an answer waiting to be read.
-    var holdsOpen: Bool { isTyping || card != nil || !activities.isEmpty }
+    var holdsOpen: Bool { isTyping || reviewOpen || !activities.isEmpty }
     var searchRow: Int { 2 + hits.count }
     private var rowCount: Int { searchRow + 1 }
 
@@ -73,26 +78,29 @@ final class DockModel {
         captureFocus += 1
     }
 
-    func open(_ card: Card) {
-        self.card = card
+    func openReview() {
+        reviewOpen = true
         onNeedsKey()
-        if card == .meeting { promptFocus += 1 }
+        promptFocus += 1
     }
 
-    func closeCard() {
-        card = nil
+    func closeReview() {
+        reviewOpen = false
         onFinish()
     }
 
-    /// You clicked into another app: put the box and any open card away, like the Dock would.
+    /// You clicked into another app: put the box and any open prompt away, like the Dock would.
     func lostFocus() {
         isTyping = false
-        card = nil
+        reviewOpen = false
     }
 
-    /// A click anywhere outside the Dock puts the current answer away, like a popover.
+    /// A click anywhere outside the Dock puts the current answer away, like a popover. Failures
+    /// stay until you act on them: they hold the text you typed.
     func clickedAway() {
-        if let bubble { dismiss(bubble.id) }
+        guard let bubble else { return }
+        if case .failed = bubble.state { return }
+        dismiss(bubble.id)
     }
 
     // MARK: The box
@@ -168,13 +176,18 @@ final class DockModel {
 
     func undo(_ id: Activity.ID) {
         guard let activity = activities.first(where: { $0.id == id }), case .done(let result) = activity.state else { return }
+        guard !undoing.contains(id) else { return }
+        undoing.insert(id)
         serialized { [self] in
+            defer { undoing.remove(id) }
             do {
-                struct Undone: Decodable { let skipped: [String] }
+                struct Undone: Decodable { let restored: [String]; let skipped: [String] }
                 let data = try await Jarvis.run(["undo", "--", result.runId])
                 let undone = try JSONDecoder().decode(Undone.self, from: data)
-                update(id) { $0.state = .undone }
                 if !undone.skipped.isEmpty { show("Left \(undone.skipped.joined(separator: ", ")) alone: edited since") }
+                // Nothing put back: the answer still describes the vault, so it stays.
+                guard !undone.restored.isEmpty else { return }
+                update(id) { $0.state = .undone }
                 dismiss(id, after: 3)
             } catch {
                 show("couldn't undo: \(error.localizedDescription)")
@@ -184,7 +197,8 @@ final class DockModel {
 
     func dismiss(_ id: Activity.ID) {
         activities.removeAll { $0.id == id }
-        if answers.isEmpty { onFinish() }
+        // A save's timer can run out while you type the next thing; that isn't you being done.
+        if answers.isEmpty, !isTyping, !reviewOpen { onFinish() }
     }
 
     func retry(_ id: Activity.ID) {
@@ -282,12 +296,12 @@ final class DockModel {
         guard let current = reviewing, current.id == id else { return }
         resolving.insert(id)
         pending.removeFirst()
-        lines = reviewing.map(DraftLine.lines(for:)) ?? []
-        if reviewing == nil { closeCard() } else { promptFocus += 1 }
+        if reviewing == nil { closeReview() } else { promptFocus += 1 }
 
         serialized { [self] in
             do {
                 _ = try await Jarvis.run(["resolve"] + args + ["--", current.noteName], input: input)
+                drafts[id] = nil
                 if args.isEmpty { bounce += 1 }
                 show("\(done) \(current.proposal.title)")
             } catch {
@@ -307,10 +321,9 @@ final class DockModel {
             .filter { !resolving.contains($0.id) }
             .sorted { $0.noteName < $1.noteName }
         let arrived = Set(loaded.map(\.id)).subtracting(pending.map(\.id))
-        let firstChanged = loaded.first?.id != pending.first?.id
         pending = loaded
-        if firstChanged { lines = reviewing.map(DraftLine.lines(for:)) ?? [] }
-        if card == .meeting, pending.isEmpty { closeCard() }
+        for prompt in loaded where drafts[prompt.id] == nil { drafts[prompt.id] = DraftLine.lines(for: prompt) }
+        if reviewOpen, pending.isEmpty { closeReview() }
         if !arrived.isEmpty { attention += 1 }
     }
 
@@ -323,34 +336,3 @@ final class DockModel {
     }
 }
 
-// MARK: Demo
-
-extension DockModel {
-    /// Seeds one screen for the README screenshots (`JARVIS_DEMO=<screen>`, see scripts/screenshots.sh).
-    /// Search and the meeting prompt are real, against the demo vault and state; Claude's
-    /// progress and answers are canned, since they'd need a live model.
-    func demo(_ screen: String) {
-        switch screen {
-        case "search":
-            requestFocus()
-            query = "launch plan"
-        case "working":
-            var activity = Activity(text: "what did we decide about the launch date?")
-            activity.step = "Reading 2026-10-29"
-            activities = [activity]
-        case "answer":
-            var activity = Activity(text: "what did we decide about the launch date?")
-            activity.state = .done(AskResult(
-                runId: "demo", kind: .found,
-                message: "Launch moves to 12 November",
-                detail: "Decided in Thursday's planning call: ship after the billing migration, with Sam owning the release notes.",
-                notes: [Note(path: "Work Log.md", title: "Work Log"), Note(path: "Meetings/2026-10-29 1057 Slack Huddle.md", title: "2026-10-29 1057 Slack Huddle")],
-                open: nil, changed: []))
-            activities = [activity]
-        case "meeting":
-            open(.meeting)
-        default:
-            break
-        }
-    }
-}

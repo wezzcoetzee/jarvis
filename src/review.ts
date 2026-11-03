@@ -27,10 +27,3 @@ export function parseDraft(text: string): Capture {
   }
   return capture;
 }
-
-export async function notify(message: string): Promise<void> {
-  await Bun.spawn([
-    "osascript", "-e", "on run argv", "-e", 'display notification (item 1 of argv) with title "Jarvis"', "-e", "end run",
-    message,
-  ]).exited;
-}

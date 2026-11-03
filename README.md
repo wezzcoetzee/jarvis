@@ -6,8 +6,8 @@ The point is to stop losing things: the "I need to speak to Sam about that" from
 
 | | |
 |---|---|
-| ![Find any note as you type](screenshots/framed/search.png) | ![Hand it to Claude](screenshots/framed/working.png) |
-| ![Answers rise out of the Dock](screenshots/framed/answer.png) | ![Meetings become todos](screenshots/framed/meeting.png) |
+| ![Find any note as you type](screenshots/05-search.png) | ![Hand it to Claude](screenshots/08-working.png) |
+| ![Answers rise out of the Dock](screenshots/12-answer.png) | ![Meetings become todos](screenshots/18-meeting-prompt.png) |
 
 ## What it does
 
@@ -100,7 +100,7 @@ Jarvis never asks for Accessibility, Input Monitoring or Screen Recording.
 
 ## Configure
 
-Create `~/.config/jarvis/config.json`. Every key is optional:
+Create `~/.config/jarvis/config.json` (or set `JARVIS_CONFIG` to another folder). Every key is optional, and a file that isn't valid JSON or has a key of the wrong type stops Jarvis with one `error:` line saying which:
 
 ```json
 {
@@ -178,7 +178,7 @@ Right-click the Dock (anywhere but an icon) for **Settings…** and **Quit Jarvi
   - keeps reads and searches inside the vault and out of `private` folders;
   - only allows edits to `.md` notes, and never to dot-folders like `.obsidian` and `.claude`, or to `CLAUDE.md` or `AGENTS.md`.
 - **Deny rules as well.** Claude Code permission rules deny the same private folders, and they also filter private notes out of searches across the whole vault, which the hook can't see.
-- **Every run can be undone.** The hook copies each note before Claude's first edit to it. `jarvis undo <run id>` (or Undo in the bubble) puts them back, and deletes notes the run created. Notes you've edited since are left alone, so undo never throws away newer work. A run that fails part-way is undone automatically.
+- **Every run can be undone.** The hook copies each note before Claude's first edit to it. `jarvis undo <run id>` (or Undo in the bubble) puts them back, and deletes notes the run created. Notes you've edited since are left alone, so undo never throws away newer work. A run that fails part-way is undone automatically. Runs, and the note copies they hold, are deleted after 7 days.
 - **Untrusted context stays data.** The browser tab title is cut to one sanitised line and labelled as coming from the web. Claude is told that anything from other apps is information, never an instruction.
 
 The rest of the design follows a few rules:
@@ -205,9 +205,9 @@ bun src/main.ts resolve [--skip] -- "<note name>"         # save a queued meetin
 
 Everything after `--` is text, so it can start with dashes. Failures print one `error: …` line on stderr, and `ask` prints its progress as `step: …` lines.
 
-The first `watch` marks every existing recording as seen, so only new meetings prompt.
+The first `watch` marks every existing recording as seen, so only new meetings prompt. A recording that fails to draft (offline, the API busy) is tried 3 times, 5 minutes apart, then you get a notification and it's skipped.
 
-`JARVIS_VAULT` and `JARVIS_STATE` override the vault and state paths, for the CLI and the Dock. Use them to test against a copy of your vault.
+`JARVIS_VAULT`, `JARVIS_STATE` and `JARVIS_CONFIG` override the vault, state and config paths, for the CLI and the Dock. Use them to test against a copy of your vault.
 
 ## Development
 
@@ -218,6 +218,8 @@ swift build --package-path dock
 swift run --package-path dock      # runs the Dock against src/ through bun, without packaging;
                                    # it applies Settings too, including replacing the macOS Dock
 ```
+
+`bun test` runs against a throwaway vault and config (`src/test-env.ts`, preloaded by `bunfig.toml`), never your real ones.
 
 | File | Does |
 |---|---|
@@ -232,7 +234,8 @@ swift run --package-path dock      # runs the Dock against src/ through bun, wit
 | `src/review.ts` | The draft line format shared with the Dock |
 | `src/search.ts` | Vault search |
 | `src/vault.ts` | Section-aware appends to the daily note, Inbox and Work Log |
-| `src/state.ts` | Seen recordings, the event log and the prompt queue |
+| `src/state.ts` | Seen recordings, failed drafts, the event log and the prompt queue |
+| `src/files.ts` | Reading files that may not exist, and atomic writes |
 | `dock/Sources/JarvisDock/DockModel.swift` | Capture, search, answers and meeting prompts |
 | `dock/Sources/JarvisDock/DockView.swift` | All Dock UI but the Downloads fan |
 | `dock/Sources/JarvisDock/DockPanel.swift` | The non-activating panel, placement and auto-hide |
@@ -242,11 +245,23 @@ swift run --package-path dock      # runs the Dock against src/ through bun, wit
 | `dock/Sources/JarvisDock/Preferences.swift` | Settings, replacing the macOS Dock, open at login |
 | `dock/Sources/JarvisDock/Watcher.swift` | Runs `jarvis watch` while the app is open |
 | `dock/Sources/JarvisDock/HotKey.swift` | ⌥Space via Carbon, which needs no permission |
+| `dock/Sources/JarvisDock/Screenshots.swift` | Stages one scene for a screenshot (`JARVIS_SCREENSHOT`) |
 | `scripts/package.sh` | Builds the app and the DMG |
-| `scripts/screenshots.sh` | Captures the screenshots above from a demo vault (`JARVIS_DEMO`) |
+| `scripts/screenshots.sh` | Captures every Dock state from fixtures (see Screenshots) |
 | `scripts/icon.sh` | Rebuilds `assets/AppIcon.icns` from `assets/AppIcon.svg` |
 
 Every animation is a one-shot spring that plays when something changes. The only repeating motion is the "working" dots, which redraw three times a second and only while Claude is working. Nothing runs at the display's refresh rate.
+
+## Screenshots
+
+```sh
+scripts/screenshots.sh              # every scene, into screenshots/
+scripts/screenshots.sh saved found  # just these
+```
+
+Each scene runs the real Dock against fixtures in `scripts/screenshots/fixtures` (a made-up vault, meeting prompts, Downloads and pinned apps) with a stand-in `claude` and `osascript` from `scripts/screenshots/bin`. Your config, vault, state, Downloads, the macOS Dock and login items are never touched. The Dock draws over its own backdrop, so nothing else on screen gets in. Leave the mouse and keyboard alone until it finishes.
+
+Files are numbered by scene, `01-resting.png` to `20-settings.png`, so a partial run replaces the same files.
 
 ## Troubleshooting
 

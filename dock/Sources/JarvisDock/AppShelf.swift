@@ -16,19 +16,29 @@ struct DockApp: Identifiable {
 /// followed by every other running app, then Downloads and the Trash like the macOS Dock.
 /// Pinned apps stay when quit, with no running dot; the rest leave when they quit. The first
 /// launch fills the file from the macOS Dock, and "Keep in Dock" on an icon's menu edits it.
+/// Apps in its `hidden` list never show, even while running, so an app left open in the
+/// background stays out of the way; "Hide from Dock" adds to it and "Hidden Apps" takes away.
 @MainActor @Observable
 final class AppShelf {
     private(set) var apps: [DockApp] = []
     private(set) var places: [DockApp] = []
+    /// What "Hidden Apps" on the Dock's own menu lists, running or not.
+    private(set) var hiddenApps: [DockApp] = []
     private(set) var trashFull: Bool?
     /// The Downloads fan is open, so its tile shows the close button.
     var stackOpen = false
-    @ObservationIgnored private var pinned = AppShelf.loadPinned()
+    @ObservationIgnored private var config = AppShelf.loadConfig()
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     @ObservationIgnored private var trashTimer: Timer?
     @ObservationIgnored private var newestDownload: URL?
     @ObservationIgnored private var downloadsWatcher: DispatchSourceFileSystemObject?
     @ObservationIgnored private let trash = try? FileManager.default.url(for: .trashDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+    /// Off for screenshots, so only the pinned apps show, never whatever happens to be running.
+    @ObservationIgnored private let showsRunning: Bool
+
+    init(showsRunning: Bool = true) {
+        self.showsRunning = showsRunning
+    }
 
     func start() {
         refresh()
@@ -49,18 +59,30 @@ final class AppShelf {
     }
 
     func isPinned(_ app: DockApp) -> Bool {
-        pinned.contains(app.id)
+        config.pinned.contains(app.id)
     }
 
-    /// Apps without a bundle id (rare command-line GUIs) can't be pinned.
+    /// Apps without a bundle id (rare command-line GUIs) can't be pinned or hidden.
     func canPin(_ app: DockApp) -> Bool {
         app.isApp && (app.running == nil || app.running?.bundleIdentifier == app.id)
     }
 
     func togglePin(_ app: DockApp) {
-        if isPinned(app) { pinned.removeAll { $0 == app.id } } else { pinned.append(app.id) }
-        savePinned()
-        refresh()
+        if isPinned(app) { config.pinned.removeAll { $0 == app.id } } else { config.pinned.append(app.id) }
+        save()
+    }
+
+    /// Takes the app off the Dock without quitting it. A pinned app is unpinned too, since a
+    /// hidden app can't also be kept.
+    func hide(_ app: DockApp) {
+        config.pinned.removeAll { $0 == app.id }
+        config.hidden.append(app.id)
+        save()
+    }
+
+    func unhide(_ app: DockApp) {
+        config.hidden.removeAll { $0 == app.id }
+        save()
     }
 
     func reveal(_ app: DockApp) {
@@ -85,15 +107,20 @@ final class AppShelf {
         }
         let byID = Dictionary(running.compactMap { app in app.bundleIdentifier.map { ($0, app) } }) { first, _ in first }
 
-        let pinnedApps = pinned.compactMap { id -> DockApp? in
+        func installed(_ id: String) -> DockApp? {
             guard let url = byID[id]?.bundleURL ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else {
                 return nil
             }
             let name = url.deletingPathExtension().lastPathComponent
             return DockApp(id: id, name: name, icon: NSWorkspace.shared.icon(forFile: url.path), url: url, running: byID[id])
         }
+        hiddenApps = config.hidden.compactMap(installed)
         let others = running
-            .filter { !pinned.contains($0.bundleIdentifier ?? "") }
+            .filter { app in
+                guard showsRunning else { return false }
+                let id = app.bundleIdentifier ?? ""
+                return !config.pinned.contains(id) && !config.hidden.contains(id)
+            }
             .map { app in
                 DockApp(
                     id: app.bundleIdentifier ?? "\(app.processIdentifier)",
@@ -103,10 +130,10 @@ final class AppShelf {
                     running: app
                 )
             }
-        apps = pinnedApps + others
+        apps = config.pinned.compactMap(installed) + others
     }
 
-    static let downloadsFolder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+    static let downloadsFolder = Jarvis.downloadsDir
 
     /// Newest first, by when each file landed in Downloads: the macOS Dock's default.
     static func newestDownloads() -> [URL] {
@@ -189,30 +216,48 @@ final class AppShelf {
         do { try finder.run() } catch { NSLog("Jarvis: couldn't empty the Trash: \(error)") }
     }
 
-    private struct Config: Codable { var pinned: [String] }
-    private static let configURL = URL(filePath: NSHomeDirectory()).appending(path: ".config/jarvis/dock.json")
+    private struct Config: Codable {
+        var pinned: [String]
+        var hidden: [String] = []
+
+        init(pinned: [String]) { self.pinned = pinned }
+
+        /// Either key may be missing: files written before `hidden` existed have only `pinned`.
+        init(from decoder: Decoder) throws {
+            let keys = try decoder.container(keyedBy: CodingKeys.self)
+            pinned = try keys.decodeIfPresent([String].self, forKey: .pinned) ?? []
+            hidden = try keys.decodeIfPresent([String].self, forKey: .hidden) ?? []
+        }
+    }
+    private static let configURL = Jarvis.configDir.appending(path: "dock.json")
 
     /// Without a dock.json yet, starts from the apps kept in the macOS Dock, Finder first as it
     /// always is there, and saves them as Jarvis's own.
-    private static func loadPinned() -> [String] {
+    private static func loadConfig() -> Config {
         if let data = try? Data(contentsOf: configURL) {
-            return (try? JSONDecoder().decode(Config.self, from: data).pinned) ?? []
+            if let config = try? JSONDecoder().decode(Config.self, from: data) { return config }
+            // A hand edit gone wrong. Keep it, rather than overwrite it on the next pin.
+            let kept = configURL.appendingPathExtension("invalid")
+            try? FileManager.default.removeItem(at: kept)
+            try? FileManager.default.moveItem(at: configURL, to: kept)
+            NSLog("Jarvis: dock.json isn't valid; moved it to \(kept.lastPathComponent) and started again")
         }
         let kept = (UserDefaults(suiteName: "com.apple.dock")?.array(forKey: "persistent-apps") as? [[String: Any]] ?? [])
             .compactMap { ($0["tile-data"] as? [String: Any])?["bundle-identifier"] as? String }
-        let pinned = ["com.apple.finder"] + kept.filter { $0 != "com.apple.finder" }
-        save(pinned)
-        return pinned
+        let config = Config(pinned: ["com.apple.finder"] + kept.filter { $0 != "com.apple.finder" })
+        save(config)
+        return config
     }
 
-    private func savePinned() {
-        Self.save(pinned)
+    private func save() {
+        Self.save(config)
+        refresh()
     }
 
-    private static func save(_ pinned: [String]) {
+    private static func save(_ config: Config) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
-        guard let data = try? encoder.encode(Config(pinned: pinned)) else { return }
+        guard let data = try? encoder.encode(config) else { return }
         try? FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: configURL, options: .atomic)
     }

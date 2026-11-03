@@ -104,7 +104,8 @@ private struct Stagger: ViewModifier {
         content
             .opacity(shown ? 1 : 0)
             .offset(y: shown ? 0 : 8)
-            .onAppear { withAnimation(spring.delay(Double(index) * 0.05)) { shown = true } }
+            // Capped, so a long list (or a line you just added) isn't left waiting its turn.
+            .onAppear { withAnimation(spring.delay(Double(min(index, 4)) * 0.05)) { shown = true } }
     }
 }
 
@@ -112,10 +113,11 @@ struct DockView: View {
     @Bindable var model: DockModel
     let shelf: AppShelf
     let openSettings: () -> Void
-    /// Opens or closes the Downloads fan above the tile with this frame.
-    let openStack: (CGRect) -> Void
+    /// Opens or closes the Downloads fan.
+    let openStack: () -> Void
+    /// Where each icon (by app id) and the box ("capture") are, in the window, top-left origin.
+    let placed: (String, CGRect) -> Void
     let resize: (CGSize) -> Void
-    @State private var downloadsTile = CGRect.zero
 
     var body: some View {
         // Leading, so the sheet and the answer bubble rise out of the box on the left.
@@ -132,7 +134,7 @@ struct DockView: View {
         .padding(.bottom, AppTile.reach)
         .fixedSize()
         .animation(spring, value: model.showsSheet)
-        .animation(spring, value: model.card)
+        .animation(spring, value: model.reviewOpen)
         .animation(spring, value: model.bubble?.id)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { resize($0) }
         // The window shrinks only after the content has (see DockPanelController.resize), so
@@ -141,7 +143,7 @@ struct DockView: View {
     }
 
     @ViewBuilder private var above: some View {
-        if model.card == .meeting, let pending = model.reviewing {
+        if model.reviewOpen, let pending = model.reviewing {
             MeetingCard(model: model, pending: pending)
         } else if model.showsSheet {
             Sheet(model: model)
@@ -159,13 +161,11 @@ struct DockView: View {
         HStack(spacing: 0) {
             ForEach(apps) { app in
                 AppTile(app: app, bounce: app.id == "md.obsidian" ? model.bounce : 0, closes: app.id == "downloads" && shelf.stackOpen) {
-                    if app.id == "downloads" { openStack(downloadsTile) } else { shelf.open(app) }
+                    if app.id == "downloads" { openStack() } else { shelf.open(app) }
                 }
                 // The icon's own menu, like the macOS Dock, instead of Jarvis's.
                 .contextMenu { AppMenu(app: app, shelf: shelf) }
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
-                    if app.id == "downloads" { downloadsTile = $0 }
-                }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { placed(app.id, $0) }
             }
         }
     }
@@ -174,8 +174,9 @@ struct DockView: View {
         HStack(spacing: 8) {
             Group {
                 CapturePill(model: model)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { placed("capture", $0) }
                 if let pending = model.reviewing {
-                    Button { model.open(.meeting) } label: {
+                    Button { model.openReview() } label: {
                         Label(model.pending.count > 1 ? "\(pending.proposal.title) · \(model.pending.count)" : pending.proposal.title,
                               systemImage: "waveform")
                             .lineLimit(1)
@@ -199,6 +200,12 @@ struct DockView: View {
         .glass(20)
         .contextMenu {
             Button("Settings…", action: openSettings)
+            // Hidden apps have no icon to right-click, so this is the way back.
+            if !shelf.hiddenApps.isEmpty {
+                Menu("Hidden Apps") {
+                    ForEach(shelf.hiddenApps) { app in Button(app.name) { shelf.unhide(app) } }
+                }
+            }
             Divider()
             Button("Quit Jarvis") { NSApp.terminate(nil) }
         }
@@ -212,8 +219,8 @@ private struct CapturePill: View {
     @Bindable var model: DockModel
     @State private var hovering = false
 
-    /// Hovering the resting box previews a click: it widens toward its typing size and the
-    /// pencil tilts as if about to write.
+    /// Hovering the resting box previews a click: the pencil tilts as if about to write. It
+    /// doesn't widen, which would shove every icon along under the pointer.
     private var invites: Bool { hovering && !model.isTyping && !showsStep }
 
     private var icon: String {
@@ -247,13 +254,12 @@ private struct CapturePill: View {
                 text: $model.query,
                 placeholder: placeholder,
                 focusCount: model.captureFocus,
-                // Opening the meeting card also makes the panel key; that isn't typing.
-                onFocus: { if model.card == nil { model.isTyping = true } },
+                // Opening the meeting prompt also makes the panel key; that isn't typing.
+                onFocus: { if !model.reviewOpen { model.isTyping = true } },
                 onMove: model.move,
                 onSubmit: model.submit,
                 onCancel: model.cancel
             )
-            .offset(x: invites ? 3 : 0)
             .overlay(alignment: .leading) {
                 if showsStep {
                     // Each new step rolls up into place, like a departures board.
@@ -268,7 +274,7 @@ private struct CapturePill: View {
             }
             .clipped()
             .animation(spring, value: step)
-            if !model.isTyping {
+            if !model.isTyping, model.flash == nil {
                 if let oldest = model.working.first {
                     WorkingBeat(started: oldest.started)
                 } else {
@@ -277,14 +283,15 @@ private struct CapturePill: View {
             }
         }
         .padding(.horizontal, 14)
-        // Grows to make room for typing, and for the step text while Claude works.
-        .frame(width: model.isTyping ? 300 : showsStep ? 330 : invites ? 220 : 190)
+        // Grows to make room for typing, and for steps and confirmations.
+        .frame(width: model.isTyping ? 300 : showsStep || model.flash != nil ? 330 : 190)
         .capsule(model.isTyping || showsStep ? .pillActive : .pill)
         .onTapGesture { model.requestFocus() }
         .onHover { hovering = $0 }
         .animation(spring, value: invites)
         .animation(spring, value: model.isTyping)
         .animation(spring, value: showsStep)
+        .animation(spring, value: model.flash)
     }
 }
 
@@ -411,13 +418,16 @@ private struct AnswerBubble: View {
                             Label(note.title, systemImage: "doc.text")
                                 .font(.system(size: 12))
                                 .lineLimit(1)
+                                // Long titles shorten; short ones hug, rather than every chip
+                                // taking the widest one's room.
+                                .frame(maxWidth: 170)
+                                .fixedSize()
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 4)
                                 .background(Capsule().fill(Color.pill))
                                 .overlay(Capsule().strokeBorder(Color.edge))
                         }
                         .buttonStyle(.plain)
-                        .frame(maxWidth: 190, alignment: .leading)
                     }
                 }
                 .padding(.top, 4)
@@ -516,9 +526,16 @@ private struct MeetingCard: View {
         }
         .frame(width: 520)
         .glass(18)
-        .onExitCommand(perform: model.closeCard)
-        .onAppear { focused = model.lines.first?.id }
-        .onChange(of: model.promptFocus) { focused = model.lines.first?.id }
+        .onExitCommand(perform: model.closeReview)
+        .onAppear(perform: focusFirstLine)
+        .onChange(of: model.promptFocus, focusFirstLine)
+    }
+
+    /// A field selects all its text when it takes focus, so the first key you pressed would
+    /// replace the todo. Put the caret at the end instead.
+    private func focusFirstLine() {
+        focused = model.lines.first?.id
+        DispatchQueue.main.async { (NSApp.keyWindow?.firstResponder as? NSTextView)?.moveToEndOfDocument(nil) }
     }
 }
 
@@ -558,6 +575,7 @@ private struct AppMenu: View {
         if app.running == nil || !app.isApp { Button("Open") { shelf.open(app) } }
         if app.isApp, shelf.canPin(app) {
             Toggle("Keep in Dock", isOn: Binding(get: { shelf.isPinned(app) }, set: { _ in shelf.togglePin(app) }))
+            Button("Hide from Dock") { shelf.hide(app) }
         }
         Button("Show in Finder") { shelf.reveal(app) }
         if let running = app.running {
@@ -612,6 +630,10 @@ private struct AppTile: View {
         }
         .onChange(of: bounce) { hop() }
         .help(app.name)
+        // One button per icon for VoiceOver, named like the macOS Dock's.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(app.name)
+        .accessibilityAddTraits(.isButton)
     }
 
     /// The Downloads tile crossfades between its file and the close button as the fan moves.
@@ -714,6 +736,8 @@ private struct CaptureField: NSViewRepresentable {
         field.cell?.usesSingleLineMode = true
         field.cell?.lineBreakMode = .byTruncatingTail
         field.delegate = context.coordinator
+        // The placeholder turns into steps and confirmations, so VoiceOver gets a fixed name.
+        field.setAccessibilityLabel("Capture or ask")
         return field
     }
 

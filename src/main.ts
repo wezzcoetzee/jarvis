@@ -3,13 +3,19 @@ import { ask, undo } from "./ask";
 import { hook } from "./backup-hook";
 import { paths, settings } from "./config";
 import { extract } from "./extract";
-import { listRecordings, settledRecordings } from "./meetings";
-import { type Capture, draft, notify, parseDraft } from "./review";
+import { readText } from "./files";
+import { draftSettled, listRecordings } from "./meetings";
+import { type Capture, draft, parseDraft } from "./review";
 import { search } from "./search";
-import { enqueue, loadSeen, logEvent, readPending, removePending, saveSeen } from "./state";
-import { commit, planDecisions, planTodos, readDaily, section } from "./vault";
+import { enqueue, loadFailures, loadSeen, logEvent, readPending, removePending, saveSeen } from "./state";
+import { commit, localDate, planDecisions, planTodos, readDaily, section } from "./vault";
 
-const localDate = (d = new Date()) => d.toLocaleDateString("en-CA");
+async function notify(message: string): Promise<void> {
+  await Bun.spawn([
+    "osascript", "-e", "on run argv", "-e", 'display notification (item 1 of argv) with title "Jarvis"', "-e", "end run",
+    message,
+  ]).exited;
+}
 
 type Meeting = { noteName: string; meetingDate: string; title: string };
 
@@ -25,16 +31,11 @@ async function handle(file: string, mode: "queue" | "dry-run" | "yes"): Promise<
   const noteName = basename(file, ".md");
   const meetingDate = noteName.slice(0, 10);
 
-  const peopleFile = Bun.file(paths.people);
-  const [note, people, daily] = await Promise.all([
-    Bun.file(file).text(),
-    peopleFile.exists().then((exists) => (exists ? peopleFile.text() : "")),
-    readDaily(localDate()),
-  ]);
+  const [note, people, daily] = await Promise.all([Bun.file(file).text(), readText(paths.people), readDaily(localDate())]);
   const proposal = await extract({
     note,
     date: meetingDate,
-    people,
+    people: people ?? "",
     openTodos: daily ? section(daily, "## Todo") : "",
   });
   await logEvent({ type: "proposed", note: noteName, proposal });
@@ -74,6 +75,7 @@ async function watch(): Promise<void> {
     seen = new Set(await listRecordings());
     await saveSeen(seen);
   }
+  const failures = await loadFailures();
   console.log(`Watching ${paths.meetings}`);
 
   // Polling one folder is cheap and sidesteps FSEvents quirks in cloud-synced folders.
@@ -91,16 +93,12 @@ async function watch(): Promise<void> {
   };
   while (true) {
     if (parent !== 1 && !parentAlive()) process.exit(0);
-    for (const name of await settledRecordings(seen)) {
-      try {
-        await handle(join(paths.meetings, name), "queue");
-      } catch (error) {
-        await logEvent({ type: "error", note: name, error: String(error) });
-        await notify(`Couldn't read ${name}. See events.jsonl.`);
-      }
-      seen.add(name);
-      await saveSeen(seen);
-    }
+    await draftSettled(
+      seen,
+      failures,
+      (name) => handle(join(paths.meetings, name), "queue"),
+      (name) => notify(`Couldn't draft ${name} after ${settings.draftAttempts} tries. See events.jsonl.`),
+    );
     await Bun.sleep(settings.pollMs);
   }
 }
