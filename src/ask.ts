@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import { z } from "zod";
 import { runClaude } from "./claude";
 import { layout, owner, paths, pluginDirs, privateFolders } from "./config";

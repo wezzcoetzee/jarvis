@@ -11,6 +11,6 @@ Read README.md first. Its "Safety" section lists hard constraints:
 - Keep vault logic in the CLI. The Dock (`dock/`) only renders and shells out to it.
 - Animations play once on change. Nothing may redraw at the display's refresh rate.
 
-Checks: `bun run typecheck && bun test`, and `swift build --package-path dock`.
+Checks: `bun run lint && bun run typecheck && bun test`, and `swift build --package-path dock`.
 
 Screenshots: `scripts/screenshots.sh` (see README "Screenshots"). It runs on fixtures only; never point it at a real vault, config or Downloads, and keep anything from them out of `scripts/screenshots/fixtures`.
