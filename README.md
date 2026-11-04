@@ -213,7 +213,7 @@ The first `watch` marks every existing recording as seen, so only new meetings p
 
 ```sh
 bun install
-bun run typecheck && bun test
+bun run lint && bun run typecheck && bun test
 swift build --package-path dock
 swift run --package-path dock      # runs the Dock against src/ through bun, without packaging;
                                    # it applies Settings too, including replacing the macOS Dock
