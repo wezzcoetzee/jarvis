@@ -43,6 +43,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if hotKey == nil { NSLog("Jarvis: couldn't register ⌥Space, another app may own it") }
     }
 
+    /// Opening Jarvis again while it runs (from Finder, Spotlight or Launchpad) opens Settings.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if Screenshots.scene == nil { settings.show() }
+        return false
+    }
+
     /// Jarvis shows no menu bar, but the menu still gives every text field the standard editing
     /// shortcuts.
     private static func editMenu() -> NSMenu {
@@ -65,6 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Never leave you without a Dock: the macOS one comes back whenever Jarvis quits.
     func applicationWillTerminate(_ notification: Notification) {
         watcher.stop()
-        if preferences.replaceSystemDock { SystemDock.restore() }
+        // Waits for a replace still under way, then restores.
+        if preferences.replaceSystemDock { SystemDock.queue.sync { SystemDock.restore() } }
     }
 }

@@ -14,6 +14,10 @@ export const Answer = z.object({
   notes: z
     .array(z.object({ path: z.string().describe("Vault-relative path"), title: z.string() }))
     .describe("At most 3, most relevant first. For found: the best matches. For saved: the notes you changed."),
+  search: z
+    .string()
+    .nullable()
+    .describe("For found: two to four words to search Obsidian for, so the person can see every match; otherwise null"),
   open: z
     .string()
     .nullable()
@@ -106,13 +110,19 @@ export async function ask(text: string, app?: string, onStep?: (step: string) =>
       env: { JARVIS_RUN: runId },
       onStep,
     });
-    return { runId, ...answer, changed: await seal(runId) };
+    const changed = await seal(runId);
+    // "Saved" with nothing changed (a blocked write, a mislabel) would promise an Undo that has
+    // nothing to undo, so it's only an answer.
+    return { runId, ...answer, kind: answer.kind === "saved" && changed.length === 0 ? "answer" : answer.kind, changed };
   } catch (error) {
     // A run that died part-way through shouldn't leave half its edits behind.
     await seal(runId);
     const { restored } = await undo(runId).catch(() => ({ restored: [] as string[] }));
-    const putBack = restored.length > 0 ? ` Put back ${restored.join(", ")}.` : "";
-    throw new Error(`${error instanceof Error ? error.message : error}${putBack}`);
+    // Said on the detail line, so the headline stays one sentence.
+    const detail = [restored.length > 0 ? "Your notes were put back" : "", error instanceof Error ? error.cause : ""]
+      .filter(Boolean)
+      .join(". ");
+    throw new Error(error instanceof Error ? error.message : String(error), { cause: detail || undefined });
   }
 }
 

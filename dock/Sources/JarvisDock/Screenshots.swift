@@ -30,7 +30,8 @@ struct Screenshots {
         let description: String
     }
 
-    /// Above everything at the Dock's own level, including a copy of Jarvis that's running.
+    /// Above everything at the Dock's own level, including a copy of Jarvis that's running. Not
+    /// higher: raising the Downloads fan to screen-saver level takes its key status, which closes it.
     private static let backdropLevel = NSWindow.Level(NSWindow.Level.statusBar.rawValue + 1)
     private static let level = NSWindow.Level(NSWindow.Level.statusBar.rawValue + 2)
 
@@ -60,6 +61,10 @@ struct Screenshots {
             // The Downloads fan opens its own window at the Dock's usual level.
             for window in shown(besides: backdrop) { window.level = Self.level }
             try await pause(1.2) // Every spring and stagger has finished.
+            // The panel can lose key to another app mid-scene, which closes an open card or fan,
+            // and the shot would show the wrong state. Fail instead, so it gets re-run.
+            if scene == "meeting-prompt" || scene == "meeting-skip", !model.reviewOpen { throw Failure(description: "the card closed before capture; run it again") }
+            if scene == "downloads", !dock.stackShown { throw Failure(description: "the fan closed before capture; run it again") }
             try capture(window, behind: backdrop)
         } catch {
             CGWarpMouseCursorPosition(pointer)
@@ -99,7 +104,7 @@ struct Screenshots {
             model.ask("What did I decide about the shed roof?")
             model.ask("When is the plumber coming back?")
             try await until("two steps") { model.working.count == 2 && model.working.allSatisfy { $0.step != nil } }
-        case "saved", "found", "answer", "question", "failed":
+        case "saved", "found", "answer", "question", "failed", "open-answer":
             model.ask(Self.asks[scene]!)
             try await until("the answer") { !model.answers.isEmpty }
         case "queue":
@@ -111,14 +116,55 @@ struct Screenshots {
             model.ask(Self.asks["saved"]!)
             try await until("the save") { !model.answers.isEmpty }
             model.undo(model.answers[0].id)
-            try await until("the undo") {
-                if case .undone = model.answers.first?.state { true } else { false }
+            try await until("the undo") { model.flash?.kind == .undone }
+        case "reply":
+            model.ask(Self.asks["question"]!)
+            try await until("the question") { !model.answers.isEmpty }
+            model.edit(model.answers[0].id)
+            try await pause(0.2)
+            model.query += "to Thursday"
+            (dock.window.firstResponder as? NSTextView)?.moveToEndOfDocument(nil)
+        case "undo-skipped":
+            // You edit the note after the save, so undo leaves it alone and says so.
+            model.ask(Self.asks["saved"]!)
+            try await until("the save") { !model.answers.isEmpty }
+            guard case .done(let result) = model.answers[0].state, let changed = result.changed.first else {
+                throw Failure(description: "the save changed nothing")
             }
+            let note = URL(filePath: ProcessInfo.processInfo.environment["JARVIS_VAULT"]!).appending(path: changed)
+            try (String(contentsOf: note, encoding: .utf8) + "- [ ] Typed after the save\n").write(to: note, atomically: true, encoding: .utf8)
+            model.undo(model.answers[0].id)
+            try await until("the notice") {
+                if case .failed = model.answers.first?.state { true } else { false }
+            }
+        case "answer-keys":
+            model.ask(Self.asks["saved"]!)
+            try await until("the answer") { !model.answers.isEmpty }
+            model.requestFocus()
+        case "narrow":
+            // A display too narrow for every icon at full size: they shrink to fit.
+            model.screenWidth = 760
         case "meeting-pill":
             try await until("the meeting prompt") { model.reviewing != nil }
         case "meeting-prompt":
             try await until("the meeting prompt") { model.reviewing != nil }
             model.openReview()
+        case "meeting-skip":
+            // Every line left out: Skip is the only button, and takes a click.
+            try await until("the meeting prompt") { model.reviewing != nil }
+            model.openReview()
+            model.lines = model.lines.map { line in
+                var line = line
+                line.included = false
+                return line
+            }
+        case "waiting":
+            // A click elsewhere puts a question away without dropping it; the box says so.
+            model.ask(Self.asks["question"]!)
+            try await until("the question") { !model.answers.isEmpty }
+            try await pause(2.2)
+            model.clickedAway()
+            try await until("the question tucked away") { model.tucked }
         case "downloads":
             try click("downloads")
         case "settings":
@@ -136,6 +182,7 @@ struct Screenshots {
         "answer": "What's left on the shed?",
         "question": "Move the dentist",
         "failed": "Book a table at Taberna for Saturday",
+        "open-answer": "Plan my week around the shed",
     ]
 
     // MARK: Driving the real UI

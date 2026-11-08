@@ -164,10 +164,12 @@ async function run(): Promise<void> {
   }
 }
 
-// One `error:` line on stderr is what the Dock shows when something fails.
+// One `error:` line on stderr is what the Dock shows when something fails, and one `detail:`
+// line under it, so a multi-line cause is joined into one.
 try {
   await run();
 } catch (error) {
   console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
+  if (error instanceof Error && error.cause) console.error(`detail: ${String(error.cause).replace(/\s*\n\s*/g, " ")}`);
   process.exit(1);
 }

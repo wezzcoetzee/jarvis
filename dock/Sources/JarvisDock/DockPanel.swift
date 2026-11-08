@@ -28,7 +28,9 @@ final class DockPanelController {
     private var size = CGSize.zero
     private var shown = true
     /// The display the Dock is on right now.
-    private var screen: NSScreen
+    private var screen: NSScreen {
+        didSet { model.screenWidth = screen.frame.width }
+    }
     /// Revealed because something arrived; stays up until the pointer has been over it.
     private var sticky = false
     private var hideTimer: Timer?
@@ -44,6 +46,7 @@ final class DockPanelController {
         self.model = model
         self.preferences = preferences
         screen = Self.screen(at: NSEvent.mouseLocation) ?? NSScreen.main ?? NSScreen.screens[0]
+        model.screenWidth = screen.frame.width
         panel.level = .statusBar
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -107,7 +110,7 @@ final class DockPanelController {
     /// ⌥Space. Opens on the display the pointer is on.
     func focus() {
         if let here = Self.screen(at: NSEvent.mouseLocation), !Self.same(here, screen) { place(on: here) }
-        model.requestFocus()
+        model.hotKey()
     }
 
     private func focusPanel() {
@@ -136,6 +139,8 @@ final class DockPanelController {
 
     /// The Dock's window, for screenshots.
     var window: NSWindow { panel }
+    /// The Downloads fan is open, for screenshots.
+    var stackShown: Bool { stack.isShown }
 
     /// What SwiftUI draws: centred in the full-width panel, sitting on its bottom edge.
     var contentFrame: CGRect {
@@ -247,14 +252,21 @@ final class DockPanelController {
         slide { [weak self] in if self?.shown == false { self?.panel.orderOut(nil) } }
     }
 
+    /// Under Reduce Motion it only fades, in place.
     private func slide(then completion: (() -> Void)? = nil) {
+        let fadeOnly = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let showing = shown
+        if fadeOnly, showing { panel.setFrame(frame(shown: true), display: true) }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.28
-            context.timingFunction = CAMediaTimingFunction(name: shown ? .easeOut : .easeIn)
-            panel.animator().setFrame(frame(shown: shown), display: true)
-            panel.animator().alphaValue = shown ? 1 : 0
-        } completionHandler: {
-            MainActor.assumeIsolated { completion?() }
+            context.timingFunction = CAMediaTimingFunction(name: showing ? .easeOut : .easeIn)
+            if !fadeOnly { panel.animator().setFrame(frame(shown: showing), display: true) }
+            panel.animator().alphaValue = showing ? 1 : 0
+        } completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                if fadeOnly, let self, !self.shown { self.panel.setFrame(self.frame(shown: false), display: false) }
+                completion?()
+            }
         }
     }
 
