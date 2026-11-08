@@ -16,4 +16,3 @@ jobs:
         echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
         bun install --frozen-lockfile
       build-command: scripts/package.sh "$VERSION"
-      artifacts: dist/Jarvis.dmg

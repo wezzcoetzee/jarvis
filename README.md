@@ -70,14 +70,14 @@ Jarvis has two parts:
 
 ```sh
 bun install
-scripts/package.sh            # builds dist/Jarvis.app and dist/Jarvis.dmg
-open dist/Jarvis.dmg          # drag Jarvis onto the Applications shortcut (~/Applications)
+scripts/package.sh 0.1.0      # builds dist/Jarvis.app, Jarvis-0.1.0.dmg and Jarvis-0.1.0.zip
+open dist/Jarvis-0.1.0.dmg     # drag Jarvis onto the Applications shortcut (~/Applications)
 open ~/Applications/Jarvis.app
 ```
 
 The DMG's Applications shortcut points at `~/Applications`, so no admin rights are needed.
 
-Pushing a `v*` tag (`git tag v0.2.0 && git push origin v0.2.0`) runs `.github/workflows/release.yml`, which builds the DMG with that version and attaches it to a GitHub release.
+Pushing a `v*` tag (`git tag v0.2.0 && git push origin v0.2.0`) runs `.github/workflows/release.yml`, which builds the DMG and zip with that version and attaches them to a GitHub release.
 
 On first launch Jarvis:
 
@@ -248,7 +248,7 @@ scripts/store.sh                   # App Store images from them, into assets/sto
 | `dock/Sources/JarvisDock/Watcher.swift` | Runs `jarvis watch` while the app is open |
 | `dock/Sources/JarvisDock/HotKey.swift` | ⌥Space via Carbon, which needs no permission |
 | `dock/Sources/JarvisDock/Screenshots.swift` | Screenshot mode: stages one state of the real Dock and captures it |
-| `scripts/package.sh` | Builds the app and the DMG |
+| `scripts/package.sh` | Builds the app, the DMG and the zip |
 | `scripts/screenshots.sh` | Runs every screenshot scene against `scripts/screenshots/fixtures` |
 | `scripts/store.sh` | Builds the App Store images in `assets/store/` from `screenshots/` (needs Chrome) |
 | `assets/AppIcon.svg` | The app icon. `scripts/icon.sh` rebuilds `assets/AppIcon.icns` from it (needs Chrome) |
