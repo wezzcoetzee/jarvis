@@ -6,9 +6,12 @@
 #
 # The CLI is compiled into the app (Contents/MacOS/jarvis-cli), so the install doesn't need Bun
 # or this repo. Ad-hoc signed, which is enough for a personal install on this Mac.
+#
+# Usage: scripts/package.sh [version]   (defaults to 0.1.0; the release workflow passes the tag)
 set -euo pipefail
 
 ROOT="${0:A:h:h}"
+VERSION="${1:-0.1.0}"
 DIST="$ROOT/dist"
 APP="$DIST/Jarvis.app"
 WORK="$(mktemp -d)"
@@ -37,8 +40,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>NSAppleEventsUsageDescription</key><string>Jarvis asks Finder to empty the Trash, and asks your browser which tab you're on when you capture.</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleVersion</key><string>0.1.0</string>
-    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleVersion</key><string>$VERSION</string>
+    <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
 </dict>

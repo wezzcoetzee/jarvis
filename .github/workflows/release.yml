@@ -1,0 +1,19 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    uses: wezzcoetzee/.github/.github/workflows/macos-release.yml@main
+    permissions:
+      contents: write
+    with:
+      setup-command: |
+        curl -fsSL https://bun.sh/install | bash
+        export PATH="$HOME/.bun/bin:$PATH"
+        echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+        bun install --frozen-lockfile
+      build-command: scripts/package.sh "$VERSION"
+      artifacts: dist/Jarvis.dmg

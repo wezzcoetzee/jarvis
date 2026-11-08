@@ -77,6 +77,8 @@ open ~/Applications/Jarvis.app
 
 The DMG's Applications shortcut points at `~/Applications`, so no admin rights are needed.
 
+Pushing a `v*` tag (`git tag v0.2.0 && git push origin v0.2.0`) runs `.github/workflows/release.yml`, which builds the DMG with that version and attaches it to a GitHub release.
+
 On first launch Jarvis:
 
 - hides the macOS Dock (you can turn this off in Settings);
