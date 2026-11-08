@@ -42,21 +42,24 @@ const clip = (text: string, max: number) => {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 };
-const noteName = (path: unknown) => clip(basename(String(path ?? ""), ".md"), 40);
+// Every step fits the box beside the timer: about 24 characters. The Dock says daily notes'
+// dates as days ("today's note"), so a date here costs no more room than its name.
+const noteName = (path: unknown) => clip(basename(String(path ?? ""), ".md"), 16);
+/** A Grep or Glob pattern as the words in it: "shed.*roof|felt" reads as "shed roof felt". */
+const words = (pattern: unknown, max: number) => clip(String(pattern ?? "").replace(/\.md\b/gi, " ").replace(/[^\p{L}\p{N}]+/gu, " "), max);
 
 /** Turns a tool call into the few words the Dock shows while Claude works. */
 export function describeStep(tool: string, input: Record<string, unknown>): string {
   switch (tool) {
     case "Read": return `Reading ${noteName(input.file_path)}`;
-    // Clipped so the whole step fits the box beside the timer.
-    case "Grep": return `Searching for “${clip(String(input.pattern ?? ""), 21)}”`;
-    case "Glob": return `Looking through ${clip(String(input.pattern ?? "notes"), 21)}`;
+    case "Grep": return `Searching “${words(input.pattern, 12) || "notes"}”`;
+    case "Glob": return words(input.pattern, 12) ? `Looking for ${words(input.pattern, 12)}` : "Looking through notes";
     case "Edit":
     case "MultiEdit": return `Updating ${noteName(input.file_path)}`;
     case "Write": return `Writing ${noteName(input.file_path)}`;
-    case "Skill": return `Using ${clip(String(input.skill ?? input.command ?? input.name ?? "a skill"), 30)}`;
+    case "Skill": return `Using ${clip(String(input.skill ?? input.command ?? input.name ?? "a skill"), 18)}`;
     case "StructuredOutput": return "Writing the answer";
-    default: return clip(tool, 30);
+    default: return clip(tool, 24);
   }
 }
 
@@ -68,6 +71,24 @@ type Event = {
   result?: string;
   structured_output?: unknown;
 };
+
+/**
+ * What the Dock says when `claude -p` fails: a headline you can act on, and on `cause` (which
+ * `jarvis` prints as its `detail:` line) what to do about it. Claude Code's own wording goes on
+ * `cause` only when the failure isn't one of these; otherwise it repeats the headline in jargon.
+ */
+export function failure(stderr: string, killed = false): Error {
+  const text = stderr.trim();
+  // Headlines, so no full stop: they sit in the same slot as Claude's own, which have none.
+  if (killed) return new Error("Claude took too long, so Jarvis stopped it");
+  // No "try again in a minute": the bubble's Try again sits right under it.
+  if (/\b529\b|overloaded/i.test(text)) return new Error("Claude is busy right now");
+  if (/\b429\b|rate.?limit|usage limit/i.test(text)) return new Error("Claude's usage limit is reached for now");
+  if (/\b401\b|not logged in|please run \/login|invalid api key/i.test(text)) {
+    return new Error("Claude Code isn't signed in", { cause: "Run claude in Terminal to sign in" });
+  }
+  return new Error("Claude stopped before it finished", { cause: text || undefined });
+}
 
 /** Runs `claude -p` and returns its structured output, validated against `schema`. */
 export async function runClaude<T extends z.ZodType>(
@@ -129,8 +150,8 @@ export async function runClaude<T extends z.ZodType>(
   };
 
   const [, stderr, code] = await Promise.all([readEvents(), new Response(proc.stderr).text(), proc.exited]);
-  if (code !== 0) throw new Error(`claude exited ${code}: ${stderr.trim()}`);
-  if (!result) throw new Error("claude returned no result");
-  if (result.is_error) throw new Error(`claude failed: ${result.result}`);
+  if (code !== 0) throw failure(stderr, proc.signalCode !== null);
+  if (!result) throw failure(stderr);
+  if (result.is_error) throw failure(String(result.result ?? ""));
   return schema.parse(result.structured_output);
 }

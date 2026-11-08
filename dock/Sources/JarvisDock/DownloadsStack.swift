@@ -108,6 +108,7 @@ private struct Fan: View {
     let more: Int
     let motion: FanMotion
     let open: (URL?) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let row: CGFloat = 54
     /// How long the rows take to sweep back in, before the window can go.
@@ -145,14 +146,15 @@ private struct Fan: View {
     /// down, top row first. Each plays once, then everything holds still.
     private func place(_ index: Int, _ row: FanRow) -> some View {
         let open = motion.open
-        let at = open ? center(index) : CGPoint(x: center(0).x, y: center(0).y + 56)
-        let motion: Animation = open
+        // With Reduce Motion the rows fade in where they belong instead of flying up.
+        let at = open || reduceMotion ? center(index) : CGPoint(x: center(0).x, y: center(0).y + 56)
+        let motion: Animation = reduceMotion ? .easeOut(duration: 0.15) : open
             ? .spring(response: 0.42, dampingFraction: 0.74).delay(Double(index) * 0.022)
             : .spring(response: 0.24, dampingFraction: 0.95).delay(Double(count - 1 - index) * 0.008)
         return row
             .frame(width: Self.rowWidth, height: Self.row, alignment: .trailing)
-            .rotationEffect(open ? Self.angle(index) : .zero, anchor: UnitPoint(x: (Self.rowWidth - Self.icon / 2) / Self.rowWidth, y: 0.5))
-            .scaleEffect(open ? 1 : 0.55, anchor: .trailing)
+            .rotationEffect(open || reduceMotion ? Self.angle(index) : .zero, anchor: UnitPoint(x: (Self.rowWidth - Self.icon / 2) / Self.rowWidth, y: 0.5))
+            .scaleEffect(open || reduceMotion ? 1 : 0.55, anchor: .trailing)
             .opacity(open ? 1 : 0)
             .offset(x: at.x - (Self.rowWidth - Self.icon / 2), y: at.y - Self.row / 2)
             .animation(motion, value: open)
@@ -171,14 +173,9 @@ private struct FanRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(name)
-                .font(.system(size: 12.5, weight: .medium))
-                .lineLimit(1)
                 .truncationMode(.middle)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(Capsule().fill(hovering ? Color.accentColor : Color(white: 0.22).opacity(0.92)))
-                .overlay(Capsule().strokeBorder(Color.white.opacity(0.15)))
-                .foregroundStyle(.white)
+                // The same tag as an icon's name on hover.
+                .nameTag(highlighted: hovering)
                 // Long names shorten in the middle; the pill hugs the rest.
                 .frame(maxWidth: 270, alignment: .trailing)
             image.frame(width: 46, height: 46)
@@ -186,6 +183,10 @@ private struct FanRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture(perform: action)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(name)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { action() }
         .task { await loadThumbnail() }
     }
 
@@ -195,7 +196,7 @@ private struct FanRow: View {
             Circle()
                 .fill(Color(white: 0.18))
                 .overlay(Circle().strokeBorder(Color.white.opacity(0.2)))
-                .overlay(Image(systemName: "arrowshape.turn.up.right.fill").font(.system(size: 18)).foregroundStyle(.white))
+                .overlay(Image(systemName: "arrow.forward.circle.fill").font(.system(size: 18)).foregroundStyle(.white))
                 .padding(3)
         case .file(let url):
             Image(nsImage: thumbnail ?? NSWorkspace.shared.icon(forFile: url.path))

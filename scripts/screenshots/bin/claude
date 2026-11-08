@@ -30,6 +30,7 @@ const replies: [match: RegExp, reply: Reply][] = [
       message: "Added a todo for Friday to order the cedar boards",
       detail: "",
       notes: [{ path: daily, title: today }],
+      search: null,
       open: null,
     },
   }],
@@ -37,12 +38,15 @@ const replies: [match: RegExp, reply: Reply][] = [
     steps: [["Glob", { pattern: "**/*Lisbon*" }], ["Read", { file_path: "Projects/Lisbon trip.md" }]],
     answer: {
       kind: "found",
-      message: "Two notes on the Lisbon trip",
+      message: "Three notes on the Lisbon trip",
       detail: "The plan and bookings are in Lisbon trip. Flights still need booking.",
       notes: [
         { path: "Projects/Lisbon trip.md", title: "Lisbon trip" },
         { path: "Projects/Lisbon packing list.md", title: "Lisbon packing list" },
+        // Long, so the shot shows chips shortening to fit the bubble.
+        { path: "Projects/Lisbon restaurants and day trips to book.md", title: "Lisbon restaurants and day trips to book" },
       ],
+      search: "Lisbon",
       open: null,
     },
   }],
@@ -53,6 +57,7 @@ const replies: [match: RegExp, reply: Reply][] = [
       message: "Three jobs left on the shed",
       detail: "- Roof: pent, felt over OSB (felt agreed with Sam)\n- Cedar cladding, 40 boards to order\n- Door and hinges",
       notes: [{ path: "Projects/Garden shed.md", title: "Garden shed" }],
+      search: null,
       open: null,
     },
   }],
@@ -63,7 +68,20 @@ const replies: [match: RegExp, reply: Reply][] = [
       message: "Move the dentist to which day?",
       detail: "The reminder letter is in your 30 October note, but it doesn't say when the appointment is.",
       notes: [],
+      search: null,
       open: null,
+    },
+  }],
+  [/my week/, {
+    steps: [["Read", { file_path: daily }], ["Read", { file_path: "Projects/Garden shed.md" }]],
+    answer: {
+      kind: "answer",
+      message: "Six jobs this week, planned in the shed note",
+      detail: "- Mon: order the cedar boards\n- Wed: felt the roof with Sam\n- Fri: plumber at 10",
+      notes: [],
+      search: null,
+      // Longer than the bubble holds, so it offers the note instead.
+      open: "Projects/Garden shed.md",
     },
   }],
   [/Taberna/, { steps: [], error: "API Error: 529 Overloaded. The model is busy, try again in a moment." }],

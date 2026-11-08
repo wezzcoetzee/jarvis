@@ -17,7 +17,8 @@ OUT="$ROOT/screenshots"
 ALL=(
   resting hover-box hover-icon typing search search-selected inbox
   working working-two saved found answer question queue failed undone
-  meeting-pill meeting-prompt downloads settings
+  meeting-pill meeting-prompt downloads settings answer-keys narrow reply undo-skipped
+  open-answer meeting-skip waiting
 )
 SCENES=("${@:-${ALL[@]}}")
 

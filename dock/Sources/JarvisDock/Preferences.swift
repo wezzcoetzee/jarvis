@@ -14,7 +14,10 @@ final class Preferences {
     var replaceSystemDock: Bool {
         didSet {
             defaults.set(replaceSystemDock, forKey: "replaceSystemDock")
-            if replaceSystemDock { SystemDock.replace() } else { SystemDock.restore() }
+            // `defaults` and restarting the Dock take a moment; the toggle shouldn't freeze for it.
+            // One at a time, in order: a quick off-and-on mustn't interleave the two.
+            let replace = replaceSystemDock
+            SystemDock.queue.async { if replace { SystemDock.replace() } else { SystemDock.restore() } }
         }
     }
 
@@ -28,6 +31,11 @@ final class Preferences {
                 openAtLogin = SMAppService.mainApp.status == .enabled
             }
         }
+    }
+
+    func refreshOpenAtLogin() {
+        let enabled = SMAppService.mainApp.status == .enabled
+        if openAtLogin != enabled { openAtLogin = enabled }
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -49,6 +57,9 @@ final class Preferences {
 /// Hides the macOS Dock while Jarvis runs: auto-hide with a reveal delay nobody will wait out.
 /// The original settings are saved first and put back when Jarvis quits.
 enum SystemDock {
+    /// Every change to the macOS Dock runs here, in order, so a quick toggle or a quit never
+    /// interleaves a replace with a restore.
+    static let queue = DispatchQueue(label: "jarvis.system-dock")
     private static let saved = "savedSystemDock"
     private static let hiddenDelay = 1000.0
 
@@ -109,17 +120,32 @@ final class SettingsWindow {
 
     @discardableResult func show() -> NSWindow {
         if window == nil {
-            let window = NSWindow(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            window.title = "Jarvis"
+            let window = SettingsPanel(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "Jarvis Settings"
             window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: SettingsView(preferences: preferences))
             window.center()
             self.window = window
         }
+        // Login Items can be changed in System Settings while Jarvis runs.
+        preferences.refreshOpenAtLogin()
         NSApp.activate()
         window!.makeKeyAndOrderFront(nil)
         return window!
     }
+}
+
+/// Jarvis has no menu bar, so ⌘W and esc have nothing to reach; the window closes itself.
+private final class SettingsPanel: NSWindow {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command, event.charactersIgnoringModifiers == "w" {
+            performClose(nil)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func cancelOperation(_ sender: Any?) { performClose(nil) }
 }
 
 private struct SettingsView: View {
@@ -127,7 +153,10 @@ private struct SettingsView: View {
 
     var body: some View {
         Form {
-            Toggle("Automatically hide and show the Dock", isOn: $preferences.autoHide)
+            Toggle(isOn: $preferences.autoHide) {
+                Text("Automatically hide and show Jarvis")
+                Text("Slides away until you push the pointer against the bottom edge.")
+            }
             Toggle(isOn: $preferences.replaceSystemDock) {
                 Text("Replace the macOS Dock")
                 Text("Hides it while Jarvis runs, and brings it back when you quit Jarvis.")
