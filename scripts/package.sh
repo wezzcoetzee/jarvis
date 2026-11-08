@@ -44,6 +44,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+# Bun's compiled binaries carry a signature stub codesign can't replace, so strip it first.
+codesign --remove-signature "$APP/Contents/MacOS/jarvis-cli"
 codesign --force --sign - "$APP/Contents/MacOS/jarvis-cli"
 codesign --force --sign - "$APP"
 
