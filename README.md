@@ -8,7 +8,7 @@ The point is to stop losing things: the "I need to speak to Sam about that" from
 
 ## What it does
 
-- **A Dock.** Your running and pinned apps, Downloads and the Trash, on frosted glass, where the icon under the pointer grows and shows its name, and the launch bounce. Downloads works like the macOS Dock's stack: its icon is your newest file, and clicking it fans out your newest files. The Trash shows when it's full and empties from its right-click menu. Like the macOS Dock it lives on one display at a time and moves to whichever display you push the pointer against the bottom of. It auto-hides and can replace the macOS Dock while Jarvis runs.
+- **A Dock.** Your running and pinned apps, Downloads and the Trash, on frosted glass, where the icon under the pointer grows and shows its name, the launch bounce, and the red badge an app sets for its unread count. Badges come from Launch Services, checked every 2 seconds, so they need no permission. Downloads works like the macOS Dock's stack: its icon is your newest file, and clicking it fans out your newest files. The Trash shows when it's full and empties from its right-click menu. Like the macOS Dock it lives on one display at a time and moves to whichever display you push the pointer against the bottom of. It auto-hides and can replace the macOS Dock while Jarvis runs.
 - **A capture box.** ⌥Space opens it. As you type, matching notes appear above it. Enter sends the text to Claude, ⌘Enter drops it in your Inbox as is, and ↑↓ picks a note to open in Obsidian.
 - **Live progress.** While Claude works, the box shows what it's doing ("Reading today's note", "Searching “launch plan”", "Using work-log").
 - **Answers in a bubble.** The answer rises out of the box in a speech bubble: a headline, a few lines, and links to the notes involved. Answers too big for the bubble offer the note that holds the rest (Open full answer), rather than pulling Obsidian in front of whatever you're typing in. Anything Claude changed can be undone from the bubble.
@@ -168,7 +168,7 @@ Right-click the Dock (anywhere but an icon), or open Jarvis again from Finder, f
 | Setting | Does |
 |---|---|
 | Automatically hide and show Jarvis | Slides away until you push the pointer against the bottom edge. Off keeps it up. Starts out matching the macOS Dock. |
-| Replace the macOS Dock | While Jarvis runs, the macOS Dock gets auto-hide with a 1000-second reveal delay. Your original settings are saved and restored when Jarvis quits, including on `kill` and logout. |
+| Replace the macOS Dock | While Jarvis runs, the macOS Dock gets auto-hide with a 1000-second reveal delay. Your original settings are saved and restored when Jarvis quits, including on `kill`, logout and a crash. |
 | Open at login | On by default, since Jarvis also runs the meeting watcher. |
 
 ## Safety
@@ -242,7 +242,7 @@ scripts/store.sh                   # App Store images from them, into assets/sto
 | `dock/Sources/JarvisDock/DockView.swift` | All Dock UI |
 | `dock/Sources/JarvisDock/DockPanel.swift` | The non-activating panel, placement and auto-hide |
 | `dock/Sources/JarvisDock/Jarvis.swift` | CLI bridge and the JSON types |
-| `dock/Sources/JarvisDock/AppShelf.swift` | Pinned and running apps, Downloads and the Trash |
+| `dock/Sources/JarvisDock/AppShelf.swift` | Pinned and running apps, their badges, Downloads and the Trash |
 | `dock/Sources/JarvisDock/DownloadsStack.swift` | The Downloads fan |
 | `dock/Sources/JarvisDock/Preferences.swift` | Settings, replacing the macOS Dock, open at login |
 | `dock/Sources/JarvisDock/Watcher.swift` | Runs `jarvis watch` while the app is open |

@@ -33,10 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.show()
 
         if let scene = Screenshots.scene {
-            Task { await Screenshots(scene: scene, model: model, dock: panel, settings: settings).run() }
+            Task { await Screenshots(scene: scene, model: model, shelf: shelf, dock: panel, settings: settings).run() }
             return
         }
         watcher.start()
+        SystemDock.guardAgainstCrashes()
         hotKey = HotKey(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey)) { [weak panel] in
             panel?.focus()
         }

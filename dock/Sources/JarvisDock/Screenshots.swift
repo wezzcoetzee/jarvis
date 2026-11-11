@@ -23,6 +23,7 @@ struct Screenshots {
 
     let scene: String
     let model: DockModel
+    let shelf: AppShelf
     let dock: DockPanelController
     let settings: SettingsWindow
 
@@ -80,7 +81,7 @@ struct Screenshots {
     private func stage() async throws -> NSWindow? {
         switch scene {
         case "resting":
-            break
+            shelf.badges = ["com.apple.mail": "3"]
         case "hover-box":
             try hover("capture")
         case "hover-icon":

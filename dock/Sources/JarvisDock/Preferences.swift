@@ -62,6 +62,33 @@ enum SystemDock {
     static let queue = DispatchQueue(label: "jarvis.system-dock")
     private static let saved = "savedSystemDock"
     private static let hiddenDelay = 1000.0
+    /// `Jarvis --restore-system-dock` restores and exits, without starting the Dock.
+    static let restoreFlag = "--restore-system-dock"
+    /// The write end of the guard's pipe. Only Jarvis holds it, so it closes when Jarvis ends.
+    nonisolated(unsafe) private static var guardPipe: Pipe?
+
+    /// A crash skips applicationWillTerminate, which would leave the macOS Dock hidden with no
+    /// Jarvis in its place. So a shell waits on a pipe that closes however Jarvis ends (a crash,
+    /// SIGKILL, a normal quit), then runs `Jarvis --restore-system-dock`. After a normal quit
+    /// the settings are already restored, so that finds nothing saved and does nothing.
+    static func guardAgainstCrashes() {
+        guard let executable = Bundle.main.executablePath else { return }
+        let pipe = Pipe()
+        let shell = Process()
+        shell.executableURL = URL(filePath: "/bin/sh")
+        // Logout's SIGTERM goes to Jarvis, which restores for itself; the guard outlives it.
+        shell.arguments = ["-c", "trap '' HUP INT TERM; read -r _; exec \"$0\" \(restoreFlag)", executable]
+        shell.standardInput = pipe
+        shell.standardOutput = FileHandle.nullDevice
+        shell.standardError = FileHandle.nullDevice
+        do {
+            try shell.run()
+            try? pipe.fileHandleForReading.close()
+            guardPipe = pipe
+        } catch {
+            NSLog("Jarvis: couldn't start the macOS Dock guard: \(error)")
+        }
+    }
 
     static func replace() {
         let dock = UserDefaults(suiteName: "com.apple.dock")

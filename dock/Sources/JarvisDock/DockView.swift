@@ -17,6 +17,8 @@ extension Color {
     /// Dark enough for white text on it (about 4.8:1).
     static let waiting = Color(red: 0.69, green: 0.37, blue: 0.03)
     static let failed = Color(red: 1, green: 0.27, blue: 0.23)
+    /// The macOS Dock's badge red.
+    static let badge = Color(red: 1, green: 0.23, blue: 0.19)
 }
 
 /// Every button on the glass: brighter under the pointer (a white button, a touch darker),
@@ -236,7 +238,7 @@ struct DockView: View {
         // No spacing: each tile pads itself, so there's no gap between icons that misses.
         HStack(spacing: 0) {
             ForEach(apps) { app in
-                AppTile(app: app, size: iconSize, bounce: app.id == "md.obsidian" ? model.bounce : 0, closes: app.id == "downloads" && shelf.stackOpen) {
+                AppTile(app: app, size: iconSize, badge: shelf.badges[app.id], bounce: app.id == "md.obsidian" ? model.bounce : 0, closes: app.id == "downloads" && shelf.stackOpen) {
                     if app.id == "downloads" { openStack() } else { shelf.open(app) }
                 }
                 // The icon's own menu, like the macOS Dock, instead of Jarvis's.
@@ -868,15 +870,24 @@ private struct MeetingCard: View {
     }
 
     private func toggleFocused() {
-        guard let index = model.lines.firstIndex(where: { $0.id == focused }) else { return }
-        withAnimation(spring) { model.lines[index].included.toggle() }
+        guard let focused else { return }
+        withAnimation(spring) { model.updateLine(focused) { $0.included.toggle() } }
+    }
+
+    /// Bound by the line's id (see `updateLine`), never by its index in the prompt.
+    private func text(of line: DraftLine) -> Binding<String> {
+        Binding {
+            model.lines.first { $0.id == line.id }?.text ?? line.text
+        } set: { text in
+            model.updateLine(line.id) { $0.text = text }
+        }
     }
 
     private var rows: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array($model.lines.enumerated()), id: \.element.id) { index, $line in
+            ForEach(Array(model.lines.enumerated()), id: \.element.id) { index, line in
                 HStack(spacing: 10) {
-                    Button { withAnimation(spring) { line.included.toggle() } } label: {
+                    Button { withAnimation(spring) { model.updateLine(line.id) { $0.included.toggle() } } } label: {
                         // Square, like a macOS checkbox; the round check means "saved" elsewhere.
                         Image(systemName: line.included ? "checkmark.square.fill" : "square")
                             .font(.system(size: 16))
@@ -889,11 +900,11 @@ private struct MeetingCard: View {
                     .accessibilityAddTraits(.isToggle)
                     // Long lines wrap so you can read them. ⏎ moves down the lines, and on the
                     // last one adds another; ⌘⏎ saves.
-                    TextField(line.kind == .todo ? "Todo" : "Decision", text: $line.text, prompt: Text(line.kind == .todo ? "New todo" : "New decision"), axis: .vertical)
+                    TextField(line.kind == .todo ? "Todo" : "Decision", text: text(of: line), prompt: Text(line.kind == .todo ? "New todo" : "New decision"), axis: .vertical)
                         .lineLimit(1...3)
                         .textFieldStyle(.plain)
                         .focused($focused, equals: line.id)
-                        .onSubmit { next(after: index) }
+                        .onSubmit { next(after: line.id) }
                         .foregroundStyle(Color.white.opacity(line.included ? 1 : Self.leftOut))
                         .accessibilityHint(line.alreadyTracked ? "Already on your list. Goes to the \(line.destination) if included" : "Goes to the \(line.destination)")
                     // ⌥⏎ sits on the line it will include or leave out, after its label, the way ⏎
@@ -913,7 +924,8 @@ private struct MeetingCard: View {
         }
     }
 
-    private func next(after index: Int) {
+    private func next(after id: DraftLine.ID) {
+        guard let index = model.lines.firstIndex(where: { $0.id == id }) else { return }
         if model.lines.indices.contains(index + 1) {
             focused = model.lines[index + 1].id
         } else if !model.lines[index].text.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -998,6 +1010,7 @@ private struct AppTile: View {
     let app: DockApp
     /// The icon's side; smaller when the bar would otherwise run off the display.
     var size = AppTile.icon
+    var badge: String?
     let bounce: Int
     /// The Downloads tile while its fan is open: a button that closes it, as in the macOS Dock.
     var closes = false
@@ -1020,6 +1033,13 @@ private struct AppTile: View {
         VStack(spacing: 4) {
             icon
                 .frame(width: size, height: size)
+                .overlay(alignment: .topTrailing) {
+                    if let badge {
+                        Badge(label: badge, size: size)
+                            .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
+                    }
+                }
+                .animation(spring, value: badge)
                 .scaleEffect(hovering ? 1.16 : 1, anchor: .bottom)
                 .offset(y: (hovering ? -5 : 0) + lift)
                 // The name shows straight away, above the magnified icon, like the macOS Dock's.
@@ -1058,7 +1078,7 @@ private struct AppTile: View {
         // One button per icon for VoiceOver, named like the macOS Dock's.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(closes ? "Close \(app.name)" : app.name)
-        .accessibilityValue(app.running == nil ? "" : "running")
+        .accessibilityValue([app.running == nil ? nil : "running", badge].compactMap(\.self).joined(separator: ", "))
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { action() }
     }
@@ -1080,6 +1100,25 @@ private struct AppTile: View {
                 .padding(4)
         } else {
             Image(nsImage: app.icon).resizable()
+        }
+    }
+
+    /// The app's own count or mark, over the icon's corner like the macOS Dock's, and magnified
+    /// with it.
+    private struct Badge: View {
+        let label: String
+        let size: CGFloat
+
+        var body: some View {
+            Text(label)
+                .font(.system(size: size * 0.27, weight: .medium))
+                .foregroundStyle(.white)
+                .fixedSize()
+                .padding(.horizontal, size * 0.1)
+                .frame(minWidth: size * 0.42, minHeight: size * 0.42)
+                .background(Capsule().fill(Color.badge))
+                .offset(x: size * 0.1, y: -size * 0.08)
+                .allowsHitTesting(false)
         }
     }
 
