@@ -25,11 +25,14 @@ final class AppShelf {
     /// What "Hidden Apps" on the Dock's own menu lists, running or not.
     private(set) var hiddenApps: [DockApp] = []
     private(set) var trashFull: Bool?
+    /// The badge each running app has set on its Dock icon ("2", "•"), by app id. Screenshots
+    /// stage their own, since the shelf doesn't read real apps' badges for them.
+    var badges: [String: String] = [:]
     /// The Downloads fan is open, so its tile shows the close button.
     var stackOpen = false
     @ObservationIgnored private var config = AppShelf.loadConfig()
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
-    @ObservationIgnored private var trashTimer: Timer?
+    @ObservationIgnored private var pollTimer: Timer?
     @ObservationIgnored private var newestDownload: URL?
     @ObservationIgnored private var downloadsWatcher: DispatchSourceFileSystemObject?
     @ObservationIgnored private let trash = try? FileManager.default.url(for: .trashDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
@@ -46,9 +49,12 @@ final class AppShelf {
         refreshTrash()
         watchDownloads()
         // Without Full Disk Access the Trash can't be watched, only checked, and a check is one
-        // stat call. The icon redraws only when it goes between empty and full.
-        trashTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshTrash() }
+        // stat call. Badges can't be watched either. Icons redraw only when something changed.
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.refreshTrash()
+                self?.refreshBadges()
+            }
         }
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
@@ -131,6 +137,16 @@ final class AppShelf {
                 )
             }
         apps = config.pinned.compactMap(installed) + others
+        refreshBadges()
+    }
+
+    private func refreshBadges() {
+        guard showsRunning else { return }
+        var badges: [String: String] = [:]
+        for app in apps {
+            if let running = app.running, let label = DockBadge.label(of: running) { badges[app.id] = label }
+        }
+        if badges != self.badges { self.badges = badges }
     }
 
     static let downloadsFolder = Jarvis.downloadsDir
@@ -260,5 +276,31 @@ final class AppShelf {
         guard let data = try? encoder.encode(config) else { return }
         try? FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: configURL, options: .atomic)
+    }
+}
+
+/// The label an app puts on its Dock icon (`NSApp.dockTile.badgeLabel`). Launch Services keeps it
+/// as the app's StatusLabel, which any process may read with no permission, but only through
+/// private calls. Each is looked up at runtime, so if macOS drops one the Dock just shows no badges.
+private enum DockBadge {
+    private typealias CreateASN = @convention(c) (CFAllocator?, pid_t) -> Unmanaged<CFTypeRef>?
+    private typealias CopyItem = @convention(c) (Int32, CFTypeRef, CFString) -> Unmanaged<CFTypeRef>?
+    private static let createASN = symbol("_LSASNCreateWithPid", as: CreateASN.self)
+    private static let copyItem = symbol("_LSCopyApplicationInformationItem", as: CopyItem.self)
+    /// kLSDefaultSessionID: the logged-in user's session.
+    private static let session: Int32 = -2
+
+    /// RTLD_DEFAULT, which Swift doesn't import: search every loaded image.
+    private static func symbol<T>(_ name: String, as type: T.Type) -> T? {
+        dlsym(UnsafeMutableRawPointer(bitPattern: -2), name).map { unsafeBitCast($0, to: type) }
+    }
+
+    static func label(of app: NSRunningApplication) -> String? {
+        guard let createASN, let copyItem,
+              let asn = createASN(nil, app.processIdentifier)?.takeRetainedValue(),
+              let item = copyItem(session, asn, "StatusLabel" as CFString)?.takeRetainedValue(),
+              let label = (item as? NSDictionary)?["label"] as? String, !label.isEmpty
+        else { return nil }
+        return label
     }
 }

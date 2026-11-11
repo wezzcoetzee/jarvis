@@ -531,6 +531,12 @@ final class DockModel {
         lines.append(.blank)
     }
 
+    /// By id, not index: ⌘⏎ mid-edit swaps in the next prompt's lines while the field is still
+    /// editing, and a stale field must find nothing to change rather than run off the end.
+    func updateLine(_ id: DraftLine.ID, _ change: (inout DraftLine) -> Void) {
+        if let index = lines.firstIndex(where: { $0.id == id }) { change(&lines[index]) }
+    }
+
     private var savedLines: [DraftLine] {
         lines.filter { $0.included && !$0.text.trimmingCharacters(in: .whitespaces).isEmpty }
     }
