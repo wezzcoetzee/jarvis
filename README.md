@@ -68,6 +68,16 @@ Jarvis has two parts:
 
 ## Install
 
+Download the DMG from [Releases](https://github.com/wezzcoetzee/jarvis/releases) and drag Jarvis to Applications.
+
+The app is not notarized, so the first launch shows "Apple could not verify Jarvis". Click Done, then open System Settings, Privacy & Security, and click Open Anyway next to Jarvis. Or clear the quarantine flag:
+
+```sh
+xattr -dr com.apple.quarantine ~/Applications/Jarvis.app
+```
+
+To build and install from source instead:
+
 ```sh
 bun install
 scripts/package.sh 0.1.0      # builds dist/Jarvis.app, Jarvis-0.1.0.dmg and Jarvis-0.1.0.zip
