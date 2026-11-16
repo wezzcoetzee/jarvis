@@ -793,7 +793,9 @@ private struct MeetingCard: View {
 
     /// More lines than this scroll, so Save and Skip never leave the screen.
     private static let lineHeight: CGFloat = 32
-    private static let maxHeight = 7 * lineHeight
+    /// Room between lines, so wrapped ones don't run into the next.
+    private static let lineGap: CGFloat = 8
+    private static let maxHeight = 7 * lineHeight + 6 * lineGap
     /// A left-out line's text and destination, dimmer than secondary text so it reads as off.
     private static let leftOut = 0.45
     /// Lines wrap, so whether they overflow is a matter of height, not count.
@@ -884,9 +886,10 @@ private struct MeetingCard: View {
     }
 
     private var rows: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: Self.lineGap) {
             ForEach(Array(model.lines.enumerated()), id: \.element.id) { index, line in
-                HStack(spacing: 10) {
+                // The checkbox and label sit on a wrapped line's first row, not its middle.
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Button { withAnimation(spring) { model.updateLine(line.id) { $0.included.toggle() } } } label: {
                         // Square, like a macOS checkbox; the round check means "saved" elsewhere.
                         Image(systemName: line.included ? "checkmark.square.fill" : "square")
