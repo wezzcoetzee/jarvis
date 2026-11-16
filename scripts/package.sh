@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Builds dist/Jarvis.app, dist/Jarvis-<version>.dmg and dist/Jarvis-<version>.zip. Install by opening the DMG and dragging Jarvis
-# onto the Applications shortcut, which points at ~/Applications so no admin rights are needed.
+# onto the Applications shortcut (/Applications; a symlink to ~ would point at the build machine's home).
 # First launch hides the macOS Dock, starts the meeting watcher and adds Jarvis to Login Items.
 # If the vault is in a cloud-synced folder, macOS asks once to let Jarvis read it.
 #
@@ -62,8 +62,7 @@ DMG="$DIST/Jarvis-$VERSION.dmg"
 STAGE="$WORK/dmg"
 mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
-mkdir -p "$HOME/Applications"
-ln -s "$HOME/Applications" "$STAGE/Applications"
+ln -s /Applications "$STAGE/Applications"
 hdiutil create -volname Jarvis -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG" >/dev/null
 
 echo "✓ $APP"
