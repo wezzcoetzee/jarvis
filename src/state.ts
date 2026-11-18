@@ -5,6 +5,8 @@ import type { Proposal } from "./extract";
 import { readJson, writeAtomic } from "./files";
 
 const seenPath = join(paths.state, "seen.json");
+const seenFolderPath = join(paths.state, "seen-folder.json");
+const heartbeatPath = join(paths.state, "watch-heartbeat");
 const eventsPath = join(paths.state, "events.jsonl");
 // The Dock watches this folder and shows one prompt per file.
 const pendingDir = join(paths.state, "pending");
@@ -19,6 +21,24 @@ export async function loadSeen(): Promise<Set<string> | null> {
 export async function saveSeen(seen: Set<string>): Promise<void> {
   await mkdir(paths.state, { recursive: true });
   await writeAtomic(seenPath, JSON.stringify([...seen].sort(), null, 2));
+}
+
+/** The meetings folder the seen list belongs to ("off" while meetings are off), or null if never saved. */
+export async function loadSeenFolder(): Promise<string | null> {
+  return readJson<string>(seenFolderPath);
+}
+
+export async function saveSeenFolder(folder: string): Promise<void> {
+  await mkdir(paths.state, { recursive: true });
+  await writeAtomic(seenFolderPath, JSON.stringify(folder));
+}
+
+/**
+ * Touched by `watch` as it goes. A watcher that's alive but hasn't touched it for minutes is
+ * stuck, usually on a macOS prompt about a cloud folder, and the Dock says so.
+ */
+export async function heartbeat(): Promise<void> {
+  await Bun.write(heartbeatPath, "");
 }
 
 /** Append-only raw log. The source for tuning which prompts get skipped. */

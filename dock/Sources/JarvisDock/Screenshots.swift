@@ -37,7 +37,13 @@ struct Screenshots {
     private static let level = NSWindow.Level(NSWindow.Level.statusBar.rawValue + 2)
 
     /// Every path the Dock and the CLI read, which scripts/screenshots.sh points at fixtures.
-    private static let fixtures = ["JARVIS_CONFIG", "JARVIS_VAULT", "JARVIS_STATE", "JARVIS_DOWNLOADS"]
+    /// `JARVIS_OBSIDIAN` too: first run lists Obsidian's vaults, and yours must never show.
+    private static let fixtures = ["JARVIS_CONFIG", "JARVIS_VAULT", "JARVIS_STATE", "JARVIS_DOWNLOADS", "JARVIS_OBSIDIAN"]
+
+    /// Dark, unless the scene is a Light mode one.
+    static func appearance(of scene: String) -> NSAppearance? {
+        NSAppearance(named: scene.hasPrefix("light") ? .aqua : .darkAqua)
+    }
 
     /// Called before anything loads: without the fixtures a scene would read, show and write to
     /// your real vault, config and Downloads.
@@ -66,6 +72,8 @@ struct Screenshots {
             // and the shot would show the wrong state. Fail instead, so it gets re-run.
             if scene == "meeting-prompt" || scene == "meeting-skip", !model.reviewOpen { throw Failure(description: "the card closed before capture; run it again") }
             if scene == "downloads", !dock.stackShown { throw Failure(description: "the fan closed before capture; run it again") }
+            if scene == "paused-open", !model.pausedOpen { throw Failure(description: "the card closed before capture; run it again") }
+            if scene == "first-run" || scene.hasPrefix("setup-"), !model.showsSetup { throw Failure(description: "the setup bubble closed before capture; run it again") }
             try capture(window, behind: backdrop)
         } catch {
             CGWarpMouseCursorPosition(pointer)
@@ -166,6 +174,45 @@ struct Screenshots {
             try await pause(2.2)
             model.clickedAway()
             try await until("the question tucked away") { model.tucked }
+        case "first-run":
+            // No vault yet (scripts/screenshots.sh points JARVIS_VAULT nowhere), so the CLI
+            // offers the fixture's made-up Obsidian vaults.
+            await model.checkSetup()
+            try await until("the vaults") { model.setupAsks }
+        case "setup-meetings", "setup-ready", "setup-no-claude":
+            await model.checkSetup()
+            try await until("the vaults") { model.setupAsks }
+            // ⏎ on the first vault, then (past the meetings question) on the folder it found.
+            model.submit(command: false)
+            try await until("the meetings question") { if case .meetings = model.setup { true } else { false } }
+            if scene == "setup-meetings" { break }
+            // The stand-in `claude` is always on PATH, so a missing one is staged.
+            if scene == "setup-no-claude" { model.claudeFound = false }
+            model.submit(command: false)
+            try await until("the invitation") { if case .ready = model.setup { true } else { false } }
+        case "open-app":
+            // Typing an app's name offers it at the top of the sheet.
+            try await type("saf", hits: false)
+            try await until("the app row") { model.appMatch != nil }
+        case "paused", "paused-open":
+            // What `jarvis watch` says when the vault has moved (src/main.ts). A missing meetings
+            // folder isn't breakage: the watcher waits for it quietly.
+            model.watcherProblem("Can't find your vault at ~/Documents/Personal")
+            if scene == "paused-open" {
+                try await pause(0.3)
+                model.togglePaused()
+            }
+        case "skip-undo":
+            try await until("the meeting prompt") { model.reviewing != nil }
+            model.openReview()
+            try await pause(0.6)
+            guard let id = model.reviewing?.id else { throw Failure(description: "no prompt to skip") }
+            model.skipPrompt(id)
+            try await until("the skip") { model.skipping != nil }
+        case "light":
+            // Light mode (see `appearance`): a save, the bubble and the bar on light glass.
+            model.ask(Self.asks["saved"]!)
+            try await until("the answer") { !model.answers.isEmpty }
         case "downloads":
             try click("downloads")
         case "settings":
@@ -301,13 +348,19 @@ struct Screenshots {
     }
 }
 
-/// Dusk colours, soft enough that the frosted glass reads the way it does on a real desktop.
+/// Dusk colours, soft enough that the frosted glass reads the way it does on a real desktop. In
+/// Light mode, the same shapes at midday.
 private struct Wallpaper: View {
+    @Environment(\.colorScheme) private var scheme
+
     var body: some View {
+        let light = scheme == .light
         ZStack {
-            LinearGradient(colors: [Color(red: 0.10, green: 0.12, blue: 0.22), Color(red: 0.04, green: 0.05, blue: 0.09)], startPoint: .top, endPoint: .bottom)
-            RadialGradient(colors: [Color(red: 0.55, green: 0.30, blue: 0.55).opacity(0.55), .clear], center: UnitPoint(x: 0.3, y: 0.85), startRadius: 0, endRadius: 520)
-            RadialGradient(colors: [Color(red: 0.20, green: 0.45, blue: 0.65).opacity(0.5), .clear], center: UnitPoint(x: 0.72, y: 0.7), startRadius: 0, endRadius: 600)
+            LinearGradient(colors: light
+                ? [Color(red: 0.86, green: 0.89, blue: 0.95), Color(red: 0.76, green: 0.82, blue: 0.9)]
+                : [Color(red: 0.10, green: 0.12, blue: 0.22), Color(red: 0.04, green: 0.05, blue: 0.09)], startPoint: .top, endPoint: .bottom)
+            RadialGradient(colors: [Color(red: 0.55, green: 0.30, blue: 0.55).opacity(light ? 0.25 : 0.55), .clear], center: UnitPoint(x: 0.3, y: 0.85), startRadius: 0, endRadius: 520)
+            RadialGradient(colors: [Color(red: 0.20, green: 0.45, blue: 0.65).opacity(light ? 0.3 : 0.5), .clear], center: UnitPoint(x: 0.72, y: 0.7), startRadius: 0, endRadius: 600)
         }
         .ignoresSafeArea()
     }

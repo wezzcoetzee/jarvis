@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { explain } from "./errors";
 import { runClaude } from "./claude";
 import { layout, owner, paths, pluginDirs, privateFolders } from "./config";
 import { prune, seal, undo } from "./runs";
@@ -118,11 +119,11 @@ export async function ask(text: string, app?: string, onStep?: (step: string) =>
     // A run that died part-way through shouldn't leave half its edits behind.
     await seal(runId);
     const { restored } = await undo(runId).catch(() => ({ restored: [] as string[] }));
-    // Said on the detail line, so the headline stays one sentence.
-    const detail = [restored.length > 0 ? "Your notes were put back" : "", error instanceof Error ? error.cause : ""]
-      .filter(Boolean)
-      .join(". ");
-    throw new Error(error instanceof Error ? error.message : String(error), { cause: detail || undefined });
+    // Said on the detail line, so the headline stays one sentence. `explain` keeps a system
+    // error's plain headline, which rethrowing it as a plain Error would otherwise lose.
+    const { message, detail: why } = explain(error);
+    const detail = [restored.length > 0 ? "Your notes were put back" : "", why ?? ""].filter(Boolean).join(". ");
+    throw new Error(message, { cause: detail || undefined });
   }
 }
 

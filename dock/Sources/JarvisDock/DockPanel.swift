@@ -52,7 +52,7 @@ final class DockPanelController {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
-        panel.appearance = NSAppearance(named: .darkAqua)
+        // No fixed appearance: the glass and its colours follow Light and Dark mode, as the macOS Dock does.
         // Clicking an app icon shouldn't take keyboard focus; only the text fields need it.
         panel.becomesKeyOnlyIfNeeded = true
         // Without this AppKit never sends mouse-moved events to the panel while it isn't key.
@@ -78,6 +78,11 @@ final class DockPanelController {
         passClicksThrough()
 
         model.onNeedsKey = { [weak self] in self?.focusPanel() }
+        // The sheet's "Open …" row: the same apps and places as the bar, opened as a click would.
+        model.apps = { shelf.apps + shelf.places }
+        model.onOpenApp = { [weak self] app in
+            if app.id == "downloads" { self?.openStack() } else { shelf.open(app) }
+        }
         model.onFinish = { [weak self] in self?.yieldFocus() }
         NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {

@@ -136,13 +136,81 @@ enum SystemDock {
     }
 }
 
+/// The open panel for "Choose another folder…", in first run and in Settings.
+@MainActor
+enum FolderPicker {
+    static func pick(prompt: String, message: String, in folder: String? = nil) -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = prompt
+        panel.message = message
+        panel.directoryURL = folder.map { URL(filePath: $0) }
+        NSApp.activate()
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+}
+
+/// Settings' vault and meetings rows: what first run chose, and the same choices again. Reads
+/// and writes go through `jarvis setup`, so the vault logic stays in the CLI.
+@MainActor @Observable
+final class VaultSettings {
+    private(set) var vault: String?
+    private(set) var vaultLabel = ""
+    private(set) var vaults: [Vault] = []
+    /// Vault-relative; nil when meetings are off.
+    private(set) var meetings: String?
+    private(set) var folders: [MeetingFolder] = []
+    /// Why the last change didn't take, under the rows.
+    private(set) var error: String?
+    /// A change landed, so the meeting watcher should start again with it.
+    @ObservationIgnored var onChange: () -> Void = {}
+    /// Changes run one after another: each rewrites config.json, and a meetings folder belongs
+    /// to whichever vault the change before it chose.
+    @ObservationIgnored private var changes: Task<Void, Never>?
+
+    /// On every show, so an old error doesn't linger.
+    func load() async {
+        error = nil
+        guard let status = try? JSONDecoder().decode(SetupStatus.self, from: await Jarvis.run(["setup"], timeout: 30)) else { return }
+        vault = status.vault
+        vaultLabel = status.vaultLabel
+        vaults = status.vaults
+        meetings = status.meetings
+        folders = (try? JSONDecoder().decode([MeetingFolder].self, from: await Jarvis.run(["setup", "--meetings", "--vault=\(status.vault)"], timeout: 30))) ?? []
+    }
+
+    func chooseVault(_ path: String) { change { ["--", path] } }
+    func chooseMeetings(_ folder: String) { change { ["--meetings", "--vault=\(self.vault ?? "")", "--", folder] } }
+    func turnMeetingsOff() { change { ["--meetings", "--off"] } }
+
+    /// `args` is read when the change's turn comes, after any change queued before it.
+    private func change(_ args: @escaping () -> [String]) {
+        let previous = changes
+        changes = Task {
+            await previous?.value
+            do {
+                _ = try await Jarvis.run(["setup"] + args(), timeout: 60)
+                error = nil
+                onChange()
+                await load()
+            } catch {
+                self.error = [error.localizedDescription, (error as? Jarvis.Failure)?.detail].compactMap(\.self).joined(separator: ". ")
+            }
+        }
+    }
+}
+
 @MainActor
 final class SettingsWindow {
     private let preferences: Preferences
+    private let vaultSettings = VaultSettings()
     private var window: NSWindow?
 
-    init(preferences: Preferences) {
+    init(preferences: Preferences, onConfigChange: @escaping () -> Void = {}) {
         self.preferences = preferences
+        vaultSettings.onChange = onConfigChange
     }
 
     @discardableResult func show() -> NSWindow {
@@ -150,12 +218,13 @@ final class SettingsWindow {
             let window = SettingsPanel(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = "Jarvis Settings"
             window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: SettingsView(preferences: preferences))
+            window.contentView = NSHostingView(rootView: SettingsView(preferences: preferences, vault: vaultSettings))
             window.center()
             self.window = window
         }
-        // Login Items can be changed in System Settings while Jarvis runs.
+        // Login Items can be changed in System Settings while Jarvis runs, and the vault by hand.
         preferences.refreshOpenAtLogin()
+        Task { await vaultSettings.load() }
         NSApp.activate()
         window!.makeKeyAndOrderFront(nil)
         return window!
@@ -177,24 +246,141 @@ private final class SettingsPanel: NSWindow {
 
 private struct SettingsView: View {
     @Bindable var preferences: Preferences
+    let vault: VaultSettings
 
     var body: some View {
         Form {
-            Toggle(isOn: $preferences.autoHide) {
-                Text("Automatically hide and show Jarvis")
-                Text("Slides away until you push the pointer against the bottom edge.")
+            VaultSection(settings: vault)
+            Section {
+                Toggle(isOn: $preferences.autoHide) {
+                    Text("Automatically hide and show Jarvis")
+                    Text("Slides away until you push the pointer against the bottom edge.")
+                }
+                Toggle(isOn: $preferences.replaceSystemDock) {
+                    Text("Replace the macOS Dock")
+                    Text("Hides it while Jarvis runs, and brings it back when you quit Jarvis.")
+                }
+                Toggle(isOn: $preferences.openAtLogin) {
+                    Text("Open at login")
+                    Text("Jarvis also runs the meeting watcher, so leave this on to catch every meeting.")
+                }
             }
-            Toggle(isOn: $preferences.replaceSystemDock) {
-                Text("Replace the macOS Dock")
-                Text("Hides it while Jarvis runs, and brings it back when you quit Jarvis.")
-            }
-            Toggle(isOn: $preferences.openAtLogin) {
-                Text("Open at login")
-                Text("Jarvis also runs the meeting watcher, so leave this on to catch every meeting.")
-            }
+            KeysSection()
         }
         .formStyle(.grouped)
         .frame(width: 420)
         .fixedSize()
+    }
+}
+
+/// Vault and Meetings, as pop-up menus offering what first run offered.
+private struct VaultSection: View {
+    let settings: VaultSettings
+    /// The menus' extra items, which aren't folders.
+    private static let other = "\u{0}other", off = "\u{0}off"
+
+    private var vaultChoice: Binding<String> {
+        Binding {
+            settings.vault ?? ""
+        } set: { choice in
+            if choice != Self.other {
+                settings.chooseVault(choice)
+            } else if let url = FolderPicker.pick(prompt: "Use as Vault", message: "Choose the folder your notes are in.") {
+                settings.chooseVault(url.path)
+            }
+        }
+    }
+
+    private var meetingsChoice: Binding<String> {
+        Binding {
+            settings.meetings ?? Self.off
+        } set: { choice in
+            switch choice {
+            case Self.off: settings.turnMeetingsOff()
+            case Self.other:
+                if let url = FolderPicker.pick(prompt: "Use for Meetings", message: "Choose the folder your call recorder saves to.", in: settings.vault) {
+                    settings.chooseMeetings(url.path)
+                }
+            default: settings.chooseMeetings(choice)
+            }
+        }
+    }
+
+    /// The current folder's recordings, or what it's waiting for.
+    private var meetingsDetail: String {
+        guard let folder = settings.meetings else { return "Off. Nothing is drafted until you choose a folder." }
+        guard let found = settings.folders.first(where: { $0.folder == folder }) else { return "Waiting for recordings in \(folder)." }
+        return "\(found.recordings == 1 ? "1 recording" : "\(found.recordings) recordings"). Follow-ups are drafted from new ones."
+    }
+
+    var body: some View {
+        // Once loaded, so the menus never show an empty choice.
+        if settings.vault != nil { rows }
+    }
+
+    private var rows: some View {
+        Section {
+            Picker(selection: vaultChoice) {
+                ForEach(settings.vaults) { Text($0.name).tag($0.path) }
+                // The vault in use, even if Obsidian doesn't list it.
+                if let vault = settings.vault, !settings.vaults.contains(where: { $0.path == vault }) {
+                    Text(URL(filePath: vault).lastPathComponent).tag(vault)
+                }
+                Divider()
+                Text("Choose another folder…").tag(Self.other)
+            } label: {
+                Text("Vault")
+                Text(settings.vaultLabel).lineLimit(1).truncationMode(.head)
+            }
+            Picker(selection: meetingsChoice) {
+                // The count is in the line under "Meetings", so the button stays a folder name.
+                ForEach(settings.folders) { Text($0.folder).tag($0.folder) }
+                if let folder = settings.meetings, !settings.folders.contains(where: { $0.folder == folder }) {
+                    Text(folder).tag(folder)
+                }
+                Divider()
+                Text("Choose another folder…").tag(Self.other)
+                Text("Off").tag(Self.off)
+            } label: {
+                Text("Meetings")
+                Text(meetingsDetail)
+            }
+            if let error = settings.error {
+                Text(error).font(.callout).foregroundStyle(.red)
+            }
+        }
+        .pickerStyle(.menu)
+    }
+}
+
+/// Every key the Dock answers to, in one place: on screen they only show while the box has them.
+private struct KeysSection: View {
+    private static let keys = [
+        ("Open or close the box, from anywhere", "⌥Space"),
+        ("Ask Jarvis", "⏎"),
+        ("Add to your Inbox as is", "⌘⏎"),
+        ("Pick a note, or an app above Ask", "↑ ↓"),
+        ("Clear, then close", "⎋"),
+        ("Undo a save or skip, or bring back what ⎋ cleared", "⌘Z"),
+        ("Open an answer's notes", "⌘1 to ⌘3"),
+        ("Edit a failed request", "⌘E"),
+        ("Include or leave out a meeting line", "⌥⏎"),
+        ("Save a meeting prompt", "⌘⏎"),
+    ]
+
+    var body: some View {
+        // One tight list rather than a row each, so the window still fits a small display.
+        Section("Keys") {
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 5) {
+                ForEach(Self.keys, id: \.0) { does, key in
+                    GridRow {
+                        Text(key).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+                        Text(does)
+                    }
+                }
+            }
+            .font(.callout)
+            .padding(.vertical, 4)
+        }
     }
 }

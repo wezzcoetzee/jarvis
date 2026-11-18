@@ -22,10 +22,16 @@ async function claudeEnv(): Promise<Record<string, string | undefined>> {
 }
 
 /** Apps opened from Finder get a bare PATH, so look where Claude Code installs itself too. */
-function claudePath(): string {
+export function findClaude(): string | null {
   const PATH = [process.env.PATH, `${homedir()}/.local/bin`, "/opt/homebrew/bin", "/usr/local/bin"].filter(Boolean).join(":");
-  const found = Bun.which("claude", { PATH });
-  if (!found) throw new Error("Couldn't find Claude Code (claude) on this Mac");
+  return Bun.which("claude", { PATH });
+}
+
+function claudePath(): string {
+  const found = findClaude();
+  if (!found) {
+    throw new Error("Claude Code isn't installed", { cause: "Install it from claude.com/claude-code, then run claude in Terminal to sign in" });
+  }
   return found;
 }
 

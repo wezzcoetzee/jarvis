@@ -7,7 +7,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let shelf = AppShelf(showsRunning: Screenshots.scene == nil)
     private let preferences = Preferences(defaults: Screenshots.scene == nil ? .standard : Screenshots.defaults())
     private let watcher = Watcher()
-    private lazy var settings = SettingsWindow(preferences: preferences)
+    /// A new vault or meetings folder from Settings restarts the watcher, so it reads the change.
+    private lazy var settings = SettingsWindow(preferences: preferences) { [weak self] in
+        if Screenshots.scene == nil { self?.watcher.restart() }
+    }
     private var panel: DockPanelController?
     private var hotKey: HotKey?
     private var terminateSignal: DispatchSourceSignal?
@@ -23,6 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         terminateSignal = terminate
         if preferences.replaceSystemDock { SystemDock.replace() }
         NSApp.mainMenu = Self.editMenu()
+        // Screenshots pick their appearance rather than inheriting this Mac's.
+        if let scene = Screenshots.scene { NSApp.appearance = Screenshots.appearance(of: scene) }
 
         let panel = DockPanelController(model: model, shelf: shelf, preferences: preferences) { [weak self] in
             self?.settings.show()
@@ -36,7 +41,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { await Screenshots(scene: scene, model: model, shelf: shelf, dock: panel, settings: settings).run() }
             return
         }
-        watcher.start()
+        // Meetings start once there's a vault: straight away, or when first run picks one.
+        model.onConfigured = { [weak self] in self?.watcher.start() }
+        model.onRetryWatcher = { [weak self] in self?.watcher.restart() }
+        watcher.onProblem = { [weak self] in self?.model.watcherProblem($0) }
+        Task { await model.checkSetup() }
         SystemDock.guardAgainstCrashes()
         hotKey = HotKey(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey)) { [weak panel] in
             panel?.focus()
