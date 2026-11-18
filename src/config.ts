@@ -21,7 +21,8 @@ const FileConfig = z
     owner: z.string(),
     /** Vault-relative paths of the notes and folders Jarvis reads and writes. */
     daily: z.string(),
-    meetings: z.string(),
+    /** `false` turns meetings off, whatever folders exist. */
+    meetings: z.union([z.string(), z.literal(false)]),
     workLog: z.string(),
     people: z.string(),
     inbox: z.string(),
@@ -36,7 +37,7 @@ const FileConfig = z
   .partial();
 
 /** The config folder. The Dock reads its own `dock.json` from the same place. */
-const configDir = expand(process.env.JARVIS_CONFIG ?? "~/.config/jarvis");
+export const configDir = expand(process.env.JARVIS_CONFIG ?? "~/.config/jarvis");
 
 async function loadConfig(): Promise<z.infer<typeof FileConfig>> {
   const file = Bun.file(join(configDir, "config.json"));
@@ -59,11 +60,14 @@ const relativePath = (path: string) => normalize(path).replace(/\/$/, "");
 /** Vault-relative locations, used in prompts and in what the Dock says it saved. */
 export const layout = {
   daily: relativePath(fileConfig.daily ?? "Daily"),
-  meetings: relativePath(fileConfig.meetings ?? "Meetings"),
+  meetings: relativePath(typeof fileConfig.meetings === "string" ? fileConfig.meetings : "Meetings"),
   workLog: relativePath(fileConfig.workLog ?? "Work Log.md"),
   people: relativePath(fileConfig.people ?? "People.md"),
   inbox: relativePath(fileConfig.inbox ?? "Inbox.md"),
 };
+
+/** Meetings turned off in Settings: the watcher drafts nothing until they're turned back on. */
+export const meetingsOff = fileConfig.meetings === false;
 
 export const privateFolders = (fileConfig.private ?? ["Private"]).map(relativePath);
 export const pluginDirs = (fileConfig.plugins ?? []).map(expand);

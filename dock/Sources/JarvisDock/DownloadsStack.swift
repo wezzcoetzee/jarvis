@@ -194,9 +194,9 @@ private struct FanRow: View {
         switch icon {
         case .finder:
             Circle()
-                .fill(Color(white: 0.18))
-                .overlay(Circle().strokeBorder(Color.white.opacity(0.2)))
-                .overlay(Image(systemName: "arrow.forward.circle.fill").font(.system(size: 18)).foregroundStyle(.white))
+                .fill(Color.solidControl)
+                .overlay(Circle().strokeBorder(Color.rim))
+                .overlay(Image(systemName: "arrow.forward.circle.fill").font(.system(size: 18)).foregroundStyle(Color.ink))
                 .padding(3)
         case .file(let url):
             Image(nsImage: thumbnail ?? NSWorkspace.shared.icon(forFile: url.path))

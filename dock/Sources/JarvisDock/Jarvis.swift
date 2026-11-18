@@ -22,13 +22,16 @@ enum Jarvis {
     static let stateDir = folder("JARVIS_STATE", default: "~/.local/share/jarvis")
     static let pendingDir = stateDir.appending(path: "pending")
     static let downloadsDir = folder("JARVIS_DOWNLOADS", default: "~/Downloads")
+    /// Where `jarvis watch` writes, and where its last `error:` line says why meetings paused.
+    static let watchLog = stateDir.appending(path: "watch.log")
     /// Obsidian names a vault after its folder: `JARVIS_VAULT`, or the `vault` path in config.json.
-    static let vaultName: String = {
+    /// Read each time, because first run writes config.json while the Dock is open.
+    static var vaultName: String {
         if let path = ProcessInfo.processInfo.environment["JARVIS_VAULT"] { return URL(filePath: path).lastPathComponent }
         let config = configDir.appending(path: "config.json")
         let json = (try? Data(contentsOf: config)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         return (json?["vault"] as? String).map { URL(filePath: $0).lastPathComponent } ?? "Vault"
-    }()
+    }
 
     struct Failure: LocalizedError {
         let errorDescription: String?
@@ -158,6 +161,40 @@ enum Day {
 
 extension String {
     var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
+}
+
+/// An Obsidian vault first run can offer, from `jarvis setup`.
+struct Vault: Decodable, Identifiable, Equatable {
+    let name: String
+    let path: String
+    var id: String { path }
+    /// The folder it sits in ("Documents", "OneDrive"), to tell vaults apart the way the sheet
+    /// tells notes apart.
+    var folder: String { URL(filePath: path).deletingLastPathComponent().lastPathComponent }
+}
+
+/// What `jarvis setup` prints: whether the vault Jarvis would use is there, and if not, the
+/// vaults Obsidian knows.
+struct SetupStatus: Decodable {
+    let ready: Bool
+    /// The vault Jarvis uses, whether or not it's there.
+    let vault: String
+    /// The same, from `~`, as Settings shows it.
+    let vaultLabel: String
+    let vaults: [Vault]
+    /// The meetings folder, vault-relative; nil when meetings are off.
+    let meetings: String?
+    /// Claude Code is on this Mac, so asks can work. Captures to the Inbox don't need it.
+    let claude: Bool
+}
+
+/// A folder in the vault that already holds call recordings, from `jarvis setup --meetings`.
+struct MeetingFolder: Decodable, Identifiable, Equatable {
+    /// Vault-relative.
+    let folder: String
+    let recordings: Int
+    var id: String { folder }
+    var name: String { URL(filePath: folder).lastPathComponent }
 }
 
 /// What `jarvis ask` prints when Claude is done.

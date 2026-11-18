@@ -8,11 +8,11 @@ The point is to stop losing things: the "I need to speak to Sam about that" from
 
 ## What it does
 
-- **A Dock.** Your running and pinned apps, Downloads and the Trash, on frosted glass, where the icon under the pointer grows and shows its name, the launch bounce, and the red badge an app sets for its unread count. Badges come from Launch Services, checked every 2 seconds, so they need no permission. Downloads works like the macOS Dock's stack: its icon is your newest file, and clicking it fans out your newest files. The Trash shows when it's full and empties from its right-click menu. Like the macOS Dock it lives on one display at a time and moves to whichever display you push the pointer against the bottom of. It auto-hides and can replace the macOS Dock while Jarvis runs.
-- **A capture box.** ⌥Space opens it. As you type, matching notes appear above it. Enter sends the text to Claude, ⌘Enter drops it in your Inbox as is, and ↑↓ picks a note to open in Obsidian.
+- **A Dock.** Your running and pinned apps, Downloads and the Trash, on frosted glass that follows Light and Dark mode, where the icon under the pointer grows and shows its name, the launch bounce, and the red badge an app sets for its unread count. Badges come from Launch Services, checked every 2 seconds, so they need no permission. Downloads works like the macOS Dock's stack: its icon is your newest file, and clicking it fans out your newest files. The Trash shows when it's full and empties from its right-click menu. Like the macOS Dock it lives on one display at a time and moves to whichever display you push the pointer against the bottom of. It auto-hides and can replace the macOS Dock while Jarvis runs.
+- **A capture box.** ⌥Space opens it. As you type, matching notes appear above it. Enter sends the text to Claude, ⌘Enter drops it in your Inbox as is, and ↑↓ picks a note to open in Obsidian. Type an app's name and it's offered at the top, to open it.
 - **Live progress.** While Claude works, the box shows what it's doing ("Reading today's note", "Searching “launch plan”", "Using work-log").
 - **Answers in a bubble.** The answer rises out of the box in a speech bubble: a headline, a few lines, and links to the notes involved. Answers too big for the bubble offer the note that holds the rest (Open full answer), rather than pulling Obsidian in front of whatever you're typing in. Anything Claude changed can be undone from the bubble.
-- **Meeting prompts.** When a new recording lands in your meetings folder, Jarvis drafts your follow-ups and the decisions made, checks them against today's todos, and shows an orange pill in the Dock. Review, edit, then save or skip.
+- **Meeting prompts.** When a new recording lands in your meetings folder, Jarvis drafts your follow-ups and the decisions made, checks them against today's todos, and shows an orange pill in the Dock. Review, edit, then save or skip. If meetings stop working (the vault moved, the config broke), a red **Meetings paused** pill says why and offers Try again. No meetings folder isn't an error: meetings just start once it appears.
 
 <table>
 <tr>
@@ -30,6 +30,22 @@ The point is to stop losing things: the "I need to speak to Sam about that" from
 <tr>
 <td><img src="screenshots/18-meeting-prompt.png" alt="A meeting prompt with todos and decisions to approve"><br>A meeting prompt</td>
 <td><img src="screenshots/19-downloads.png" alt="The Downloads stack fanned out"><br>The Downloads stack</td>
+</tr>
+<tr>
+<td><img src="screenshots/28-first-run.png" alt="First run asking which Obsidian vault to use"><br>First run picks your vault</td>
+<td><img src="screenshots/31-paused-open.png" alt="Meetings paused, with the reason and Try again"><br>Meetings paused, and why</td>
+</tr>
+<tr>
+<td><img src="screenshots/32-skip-undo.png" alt="A skipped meeting with Undo in the box"><br>A skip you can undo</td>
+<td><img src="screenshots/33-light.png" alt="The Dock and an answer in Light mode"><br>Light mode</td>
+</tr>
+<tr>
+<td><img src="screenshots/34-setup-meetings.png" alt="First run asking which folder holds call recordings"><br>First run finds your recordings</td>
+<td><img src="screenshots/36-open-app.png" alt="Typing saf offers Open Safari at the top of the sheet"><br>Open an app by name</td>
+</tr>
+<tr>
+<td><img src="screenshots/29-setup-ready.png" alt="First run's invitation to a first capture, pointing at Settings"><br>Ready for a first capture</td>
+<td><img src="screenshots/20-settings.png" alt="Settings with Vault and Meetings menus, toggles and every key"><br>Settings: vault, meetings and every key</td>
 </tr>
 </table>
 
@@ -63,7 +79,7 @@ Jarvis has two parts:
 
 - macOS 14 or later
 - Xcode or the Swift 6 toolchain, and [Bun](https://bun.sh), to build
-- [Claude Code](https://claude.com/claude-code), installed and signed in (`claude` on this Mac)
+- [Claude Code](https://claude.com/claude-code), installed and signed in (`claude` on this Mac), for asks and meeting drafts. Capturing to the Inbox works without it
 - [Obsidian](https://obsidian.md), with the vault you want Jarvis to use
 
 ## Install
@@ -91,7 +107,8 @@ On first launch Jarvis:
 
 - hides the macOS Dock (you can turn this off in Settings);
 - adds itself to Login Items;
-- starts the meeting watcher as a child process, restarting it if it dies.
+- if it has no vault yet, asks which one: the capture box opens with the vaults Obsidian knows (↑↓ and ⏎, or Choose another folder…). Then it asks "Do you record calls?", offering the vault's folders that already hold recordings (or Not now, ⎋). Both answers go into `config.json`, and it invites a first capture. Without Claude Code it says so, points you at ⌘⏎ (the Inbox needs no AI), and links the install;
+- starts the meeting watcher as a child process once there's a vault, restarting it if it dies. If it keeps dying, or gets stuck (see [Troubleshooting](#troubleshooting)), the red **Meetings paused** pill says why, with Open log and Try again (⏎).
 
 macOS may ask for two permissions:
 
@@ -102,7 +119,7 @@ Jarvis never asks for Accessibility, Input Monitoring or Screen Recording.
 
 ## Configure
 
-Create `~/.config/jarvis/config.json` (or set `JARVIS_CONFIG` to another folder). Every key is optional, and a file that isn't valid JSON or has a key of the wrong type stops Jarvis with one `error:` line saying which:
+First launch writes `vault` and `meetings` for you, and Settings changes them; for the rest, edit `~/.config/jarvis/config.json` (or set `JARVIS_CONFIG` to another folder). Every key is optional, and a file that isn't valid JSON or has a key of the wrong type stops Jarvis with one `error:` line saying which:
 
 ```json
 {
@@ -126,7 +143,7 @@ Create `~/.config/jarvis/config.json` (or set `JARVIS_CONFIG` to another folder)
 | `vault` | `~/Documents/Vault` | The Obsidian vault. Obsidian's vault name is this folder's name. |
 | `owner` | "the vault's owner" | Your name, so Claude knows which speaker in a transcript is you. |
 | `daily` | `Daily` | Folder of daily notes named `YYYY-MM-DD.md`. |
-| `meetings` | `Meetings` | Folder your call recorder writes to. |
+| `meetings` | `Meetings` | Folder your call recorder writes to, or `false` to turn meetings off. With no such folder, meetings just wait for it. |
 | `workLog` | `Work Log.md` | Running log of work done and decisions. |
 | `people` | `People.md` | Optional list of people, so names in transcripts get spelled right. |
 | `inbox` | `Inbox.md` | Where captures go when there's no daily note yet, and for ⌘Enter. |
@@ -157,15 +174,16 @@ Jarvis appends to notes and keeps each note's existing format:
 | ⏎ | Ask Jarvis: Claude saves, finds or answers, and replies in a bubble |
 | ⌘⏎ | Add to Inbox as is, with no AI |
 | ↑ ↓ | Pick a matching note to open, or "Search in Obsidian for…" |
+| Type an app's name | "Open <app>" goes on top of the sheet: any app on the Dock, Downloads (opens its fan) or the Trash. Two letters or more, one word. ⏎ still asks until you've typed the whole name ("safari") or pressed ↑ to it, so a one-word capture never launches an app |
 | ⎋ esc | Clear, then close. In a meeting prompt: close it and leave it waiting |
 
-In the sheet, ⏎ sits beside the row it will press.
+In the sheet, ⏎ sits beside the row it will press, ⌘⏎ beside Add to Inbox, and ↑ beside an app offered above Ask.
 
 With an answer showing and nothing typed, ⏎ presses the bubble's white button and ⎋ dismisses it; ⌘Z presses Undo and ⌘1 to ⌘3 open its notes. The white button is Done (or Next) when all went well, Open full answer when the answer is too long for the bubble, Reply for a question, which puts what you typed back in the box to add the answer (the question stays above it), and Try again for a failure, which repeats what you chose (Ask, or Inbox). A failure's Edit (⌘E) puts what you typed back in the box instead. The ⎋ button is always Dismiss; ⎋ on a failure keeps what you typed, so ⌘Z in the empty box brings it back. You can select an answer's text to copy it. The buttons show their keys while the box has them. With no answer waiting, ⏎ in the empty box opens a waiting meeting prompt.
 
-In a meeting prompt, ⏎ moves to the next line (on the last line, it adds one), ⌥⏎ includes or leaves out the line you're on (the hint sits on that line), and ⌘⏎ saves. Todos go to today's note, decisions to the Work Log. A line left out is dimmed. With every line left out, the only button is Skip, and it takes a click: skipping can't be undone. The meeting pill opens and closes the prompt.
+In a meeting prompt, ⏎ moves to the next line (on the last line, it adds one), ⌥⏎ includes or leaves out the line you're on (the line says which: "Leave out ⌥⏎" or "Include ⌥⏎"), and ⌘⏎ saves. Todos go to today's note, decisions to the Work Log. A line left out is dimmed. Skip sits at the far left, away from Save, and takes a click; with every line left out, it's the only button. A skip can be undone for 8 seconds: ⌘Z in the box, or Undo beside "Skipped <meeting>", puts the prompt back with your edits. The meeting pill opens and closes the prompt.
 
-The Dock stays up while you type, while Claude works and while an answer is waiting. A save that changed nothing shows as a plain answer. Saves confirm and go after 8 seconds on screen, not counting while the pointer is over the bubble or you're typing, so Undo is there while you look at it. Answers and finds also go when you click somewhere else (once they've been up for 2 seconds). Questions and failures hold what you typed, so a click elsewhere only puts them away: the box says what's put away ("1 question", "1 failed") with the bubble's own icon, the Dock can hide, and ⌥Space or a click on the box brings them back. Ask several things in a row and the answers queue ("1 of 2") in the order they finish; requests still running show as "1 more" beside the timer, and more meetings waiting as "+1" on the meeting pill. Short confirmations ("Added to Inbox", "Saved <meeting>", "Skipped <meeting>", "Undone", "Nothing to undo") show in the box for 4 seconds, and bring an auto-hidden Dock up to show them. Failures, including a failed undo or meeting save, show in the bubble with a plain headline, and under it what to do or, for a failure it can't name, the CLI's own words. A save to the vault that hangs for a minute (usually a macOS prompt about a cloud folder) fails the same way instead of holding up the writes after it. An undo that kept a note as is because you edited it since isn't a failure, and isn't shown in red. ⌘Z in the empty box also brings back what ⎋ just cleared. Inbox saves, meeting saves and undos say what they're doing in the box while they run, with the same dots and timer.
+The Dock stays up while you type, while Claude works and while an answer is waiting. A save that changed nothing shows as a plain answer. Saves confirm and go after 8 seconds on screen, not counting while the pointer is over the bubble or you're typing, so Undo is there while you look at it. Answers and finds also go when you click somewhere else (once they've been up for 2 seconds). Questions and failures hold what you typed, so a click elsewhere only puts them away: the box says what's put away ("1 question", "1 failed") with the bubble's own icon, the Dock can hide, and ⌥Space or a click on the box brings them back. Ask several things in a row and the answers queue ("1 of 2") in the order they finish; requests still running show as "1 more" beside the timer, and more meetings waiting as "+1" on the meeting pill. Short confirmations ("Added to Inbox", "Saved <meeting>", "Skipped <meeting>", "Undone", "Nothing to undo") show in the box for 4 seconds, and bring an auto-hidden Dock up to show them. Failures, including a failed undo or meeting save, show in the bubble with a plain headline, and under it what to do. A failure Jarvis can't name (a missing file, a permission macOS refused) still gets a plain headline, with the CLI's own words underneath. A save to the vault that hangs for a minute (usually a macOS prompt about a cloud folder) fails the same way instead of holding up the writes after it. An undo that kept a note as is because you edited it since isn't a failure, and isn't shown in red. ⌘Z in the empty box also brings back what ⎋ just cleared. Inbox saves, meeting saves and undos say what they're doing in the box while they run, with the same dots and timer.
 
 Daily notes and meetings are called by their day ("Today", "Yesterday", "Sun, 8 Nov"), the same way everywhere. Notes in the sheet and in a find show their folder when they aren't all in the same one.
 
@@ -175,9 +193,12 @@ Right-click the Dock (anywhere but an icon), or open Jarvis again from Finder, f
 
 | Setting | Does |
 |---|---|
+| Vault | The vault in use, with the vaults Obsidian knows and Choose another folder… |
+| Meetings | The folder your call recorder saves to (folders holding recordings come first), Choose another folder…, or Off. A change restarts the meeting watcher. |
 | Automatically hide and show Jarvis | Slides away until you push the pointer against the bottom edge. Off keeps it up. Starts out matching the macOS Dock. |
 | Replace the macOS Dock | While Jarvis runs, the macOS Dock gets auto-hide with a 1000-second reveal delay. Your original settings are saved and restored when Jarvis quits, including on `kill`, logout and a crash. |
 | Open at login | On by default, since Jarvis also runs the meeting watcher. |
+| Keys | Every shortcut the Dock answers to, in one list. |
 
 ## Safety
 
@@ -211,13 +232,15 @@ bun src/main.ts search -- "<query>"                       # JSON matches
 bun src/main.ts ask [--app=<name>] -- "<text>"            # let Claude save, find or answer
 bun src/main.ts undo -- <run id>                          # put back what an ask changed
 bun src/main.ts resolve [--skip] -- "<note name>"         # save a queued meeting prompt (draft on stdin) or skip it
+bun src/main.ts setup [-- "<vault folder>"]               # JSON: is there a vault, Claude Code and Obsidian's vaults; or choose one
+bun src/main.ts setup --meetings [--vault=<path>] [--off | -- "<folder>"]  # JSON: vault folders holding recordings; or choose one, or turn meetings off
 ```
 
 Everything after `--` is text, so it can start with dashes. Failures print one `error: …` line on stderr, and `ask` prints its progress as `step: …` lines.
 
-The first `watch` marks every existing recording as seen, so only new meetings prompt. A recording that fails to draft (offline, the API busy) is tried twice more, five minutes apart, and only then given up on with a notification. Run `jarvis process` on it to try again by hand.
+With no meetings folder, or meetings off, `watch` waits quietly. Whenever it starts on a folder it hasn't watched before (first run, another one picked in Settings, meetings turned back on), it marks the recordings already there as seen, so only new meetings prompt. A recording that fails to draft (offline, the API busy) is tried twice more, five minutes apart, and only then given up on with a notification. Run `jarvis process` on it to try again by hand.
 
-`JARVIS_VAULT`, `JARVIS_STATE` and `JARVIS_CONFIG` (the folder holding `config.json` and `dock.json`) override where things live, for the CLI and the Dock alike. Use them to test against a copy of your vault. `bun test` points all three at a temp folder itself (`src/test-env.ts`).
+`JARVIS_VAULT`, `JARVIS_STATE` and `JARVIS_CONFIG` (the folder holding `config.json` and `dock.json`) override where things live, for the CLI and the Dock alike. Use them to test against a copy of your vault. `JARVIS_OBSIDIAN` is the folder holding Obsidian's `obsidian.json`, which first run reads for the list of vaults. `bun test` points all four at a temp folder itself (`src/test-env.ts`).
 
 ## Development
 
@@ -242,18 +265,20 @@ scripts/store.sh                   # App Store images from them, into assets/sto
 | `src/extract.ts` | Drafts follow-ups and decisions from a transcript |
 | `src/meetings.ts` | Finds recordings that have finished writing |
 | `src/review.ts` | The draft line format shared with the Dock |
+| `src/errors.ts` | Plain words for failures, for the CLI's `error:` and `detail:` lines |
 | `src/files.ts` | Reading files that may not exist, and atomic writes |
 | `src/search.ts` | Vault search |
+| `src/setup.ts` | First run and Settings: Obsidian's vaults, folders holding recordings, and writing the choices to config.json |
 | `src/vault.ts` | Section-aware appends to the daily note, Inbox and Work Log |
-| `src/state.ts` | Seen recordings, failed drafts, the event log and the prompt queue |
+| `src/state.ts` | Seen recordings, failed drafts, the watcher's heartbeat, the event log and the prompt queue |
 | `dock/Sources/JarvisDock/DockModel.swift` | Capture, search, answers and meeting prompts |
 | `dock/Sources/JarvisDock/DockView.swift` | All Dock UI |
 | `dock/Sources/JarvisDock/DockPanel.swift` | The non-activating panel, placement and auto-hide |
 | `dock/Sources/JarvisDock/Jarvis.swift` | CLI bridge and the JSON types |
 | `dock/Sources/JarvisDock/AppShelf.swift` | Pinned and running apps, their badges, Downloads and the Trash |
 | `dock/Sources/JarvisDock/DownloadsStack.swift` | The Downloads fan |
-| `dock/Sources/JarvisDock/Preferences.swift` | Settings, replacing the macOS Dock, open at login |
-| `dock/Sources/JarvisDock/Watcher.swift` | Runs `jarvis watch` while the app is open |
+| `dock/Sources/JarvisDock/Preferences.swift` | Settings: vault and meetings, replacing the macOS Dock, open at login, keys |
+| `dock/Sources/JarvisDock/Watcher.swift` | Runs `jarvis watch` while the app is open, and says why when it keeps failing or gets stuck |
 | `dock/Sources/JarvisDock/HotKey.swift` | ⌥Space via Carbon, which needs no permission |
 | `dock/Sources/JarvisDock/Screenshots.swift` | Screenshot mode: stages one state of the real Dock and captures it |
 | `scripts/package.sh` | Builds the app, the DMG and the zip |
@@ -263,13 +288,15 @@ scripts/store.sh                   # App Store images from them, into assets/sto
 
 ### Screenshots
 
-`scripts/screenshots.sh` writes one PNG per state to `screenshots/` (about a minute for all 27; pass scene names to run a few). Each scene starts the real Dock, drives it through the same calls the UI makes, captures it and quits. Leave the mouse and keyboard alone while it runs; the two hover scenes move the pointer and put it back.
+`scripts/screenshots.sh` writes one PNG per state to `screenshots/` (about a minute for all 36; pass scene names to run a few). Each scene starts the real Dock, drives it through the same calls the UI makes, captures it and quits. Leave the mouse and keyboard alone while it runs; the two hover scenes move the pointer and put it back.
 
 Nothing real gets in:
 
-- **Fixtures only.** A made-up vault, config, meeting prompts and Downloads folder in `scripts/screenshots/fixtures`, copied fresh for each scene. Your config, vault, state and Downloads are never read.
+- **Fixtures only.** A made-up vault, config, meeting prompts and Downloads folder in `scripts/screenshots/fixtures`, copied fresh for each scene, and a made-up Obsidian list of vaults for the first-run scenes. Your config, vault, state, Downloads and Obsidian's vault list are never read.
 - **A stand-in model.** `scripts/screenshots/bin/claude` sits first on `PATH` and answers the scenes' requests. The real CLI still runs `ask`, the hook, run manifests and undo. A stub `osascript` beside it means no browser tab is ever read.
 - **Its own backdrop.** The Dock draws over a wallpaper of its own, above every other window including a running copy of Jarvis, and the shelf shows only the fixture's pinned apps, never what's running.
+- **Its own appearance.** Scenes are Dark mode except `light`, whatever this Mac is set to.
+- **Its own home.** Each scene runs with `HOME` set to its work folder, so paths read `~/…` and nothing lands in your real home.
 - **Hands off the system.** Screenshot mode never touches the macOS Dock, login items, ⌥Space or the meeting watcher, and its settings are thrown away.
 
 To add a scene, add a case to `stage()` in `Screenshots.swift` and its name to `ALL` in the script.
@@ -284,5 +311,5 @@ Every animation plays once, when something changes. With Reduce Motion on (Syste
 
 - **The macOS Dock didn't come back.** Run `defaults delete com.apple.dock autohide-delay; killall Dock`.
 - **Nothing happens on ⌥Space.** Another app may have the shortcut; Jarvis logs "couldn't register ⌥Space" to the system log.
-- **Saves or searches hang.** Check for a macOS permission prompt about your vault's cloud folder. It may be on another display.
+- **Saves or searches hang.** Check for a macOS permission prompt about your vault's cloud folder. It may be on another display. The watcher touches `~/.local/share/jarvis/watch-heartbeat` as it goes; if that stops for five minutes while it's running, the Dock shows **Meetings paused** with the same advice.
 - **Logs.** The watcher writes to `~/.local/share/jarvis/watch.log`. Every capture, ask, save and skip is in `~/.local/share/jarvis/events.jsonl`.

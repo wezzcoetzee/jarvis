@@ -1,13 +1,15 @@
 import { basename, join } from "node:path";
 import { ask, undo } from "./ask";
 import { hook } from "./backup-hook";
-import { paths, settings } from "./config";
+import { explain } from "./errors";
+import { meetingsOff, paths, settings } from "./config";
 import { extract } from "./extract";
-import { readText } from "./files";
+import { isFolder, readText } from "./files";
 import { draftSettled, listRecordings } from "./meetings";
 import { type Capture, draft, parseDraft } from "./review";
 import { search } from "./search";
-import { enqueue, loadFailures, loadSeen, logEvent, readPending, removePending, saveSeen } from "./state";
+import { chooseMeetings, chooseVault, meetingFolders, setupStatus, turnMeetingsOff } from "./setup";
+import { enqueue, heartbeat, loadFailures, loadSeen, loadSeenFolder, logEvent, readPending, removePending, saveSeen, saveSeenFolder } from "./state";
 import { commit, localDate, planDecisions, planTodos, readDaily, section } from "./vault";
 
 async function notify(message: string): Promise<void> {
@@ -70,13 +72,10 @@ async function resolve(noteName: string, skip: boolean): Promise<void> {
 
 async function watch(): Promise<void> {
   let seen = await loadSeen();
-  if (!seen) {
-    // First run: only react to meetings recorded from now on.
-    seen = new Set(await listRecordings());
-    await saveSeen(seen);
-  }
+  // Which folder `seen` belongs to. State from before this was recorded belongs to the current one.
+  let seenFolder = (await loadSeenFolder()) ?? (seen ? paths.meetings : null);
   const failures = await loadFailures();
-  console.log(`Watching ${paths.meetings}`);
+  let said = "";
 
   // Polling one folder is cheap and sidesteps FSEvents quirks in cloud-synced folders.
   // Jarvis.app runs the watcher. If the app dies without stopping it, exit, so the next launch
@@ -93,12 +92,41 @@ async function watch(): Promise<void> {
   };
   while (true) {
     if (parent !== 1 && !parentAlive()) process.exit(0);
-    await draftSettled(
-      seen,
-      failures,
-      (name) => handle(join(paths.meetings, name), "queue"),
-      (name) => notify(`Couldn't draft ${name} after ${settings.draftAttempts} tries. See events.jsonl.`),
-    );
+    await heartbeat();
+    // A missing vault, at startup or later, is breakage: exit with one plain `error:` line,
+    // which the Dock reads from watch.log and shows as "Meetings paused".
+    if (!(await isFolder(paths.vault))) throw new Error(`Can't find your vault at ${paths.vault}`);
+    // Meetings turned off, or no meetings folder (not everyone records calls), aren't breakage:
+    // wait quietly rather than exit and turn the Dock's pill red.
+    const present = !meetingsOff && (await isFolder(paths.meetings));
+    const status = meetingsOff ? "Meetings are off" : `${present ? "Watching" : "Waiting for"} ${paths.meetings}`;
+    if (status !== said) console.log(status);
+    said = status;
+    if (meetingsOff && seenFolder !== "off") {
+      seenFolder = "off";
+      await saveSeenFolder(seenFolder);
+    }
+    if (present) {
+      // A folder seen for the first time (first run, another one picked in Settings, meetings
+      // turned back on) starts from its recordings as they are: only meetings recorded from now
+      // on prompt, rather than every old one drafting at once.
+      if (!seen || seenFolder !== paths.meetings) {
+        seen = new Set(await listRecordings());
+        await saveSeen(seen);
+        seenFolder = paths.meetings;
+        await saveSeenFolder(seenFolder);
+      }
+      await draftSettled(
+        seen,
+        failures,
+        async (name) => {
+          // A draft can take a while; it's work, not a stall.
+          await heartbeat();
+          await handle(join(paths.meetings, name), "queue");
+        },
+        (name) => notify(`Couldn't draft ${name} after ${settings.draftAttempts} tries. See events.jsonl.`),
+      );
+    }
     await Bun.sleep(settings.pollMs);
   }
 }
@@ -111,7 +139,9 @@ const USAGE = `usage:
   jarvis resolve [--skip] [--] <note name>    (draft text on stdin)
   jarvis ask [--app=<frontmost app>] [--] <text>
   jarvis undo [--] <run id>
-  jarvis hook                                 (the PreToolUse hook jarvis ask installs)
+  jarvis setup [[--] <vault folder>]          (no folder: JSON status and Obsidian's vaults)
+  jarvis setup --meetings [--vault=<path>] [--off | [--] <folder>]   (neither: vault folders holding recordings)
+  jarvis hook                                (the PreToolUse hook jarvis ask installs)
 
 Everything after \`--\` is text, so captures may start with dashes.`;
 
@@ -150,6 +180,17 @@ async function run(): Promise<void> {
       console.log(JSON.stringify(result));
       return;
     }
+    case "setup": {
+      // `--vault=` names the vault just chosen, which config.json may not reach (JARVIS_VAULT wins).
+      const vault = flags.find((f) => f.startsWith("--vault="))?.slice("--vault=".length);
+      if (flag("meetings")) {
+        const result = flag("off") ? await turnMeetingsOff() : positional ? await chooseMeetings(positional, vault) : await meetingFolders(vault);
+        console.log(JSON.stringify(result));
+      } else {
+        console.log(JSON.stringify(positional ? await chooseVault(positional) : await setupStatus()));
+      }
+      return;
+    }
     case "hook":
       return hook();
     case "undo": {
@@ -169,7 +210,8 @@ async function run(): Promise<void> {
 try {
   await run();
 } catch (error) {
-  console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
-  if (error instanceof Error && error.cause) console.error(`detail: ${String(error.cause).replace(/\s*\n\s*/g, " ")}`);
+  const { message, detail } = explain(error);
+  console.error(`error: ${message}`);
+  if (detail) console.error(`detail: ${detail.replace(/\s*\n\s*/g, " ")}`);
   process.exit(1);
 }
