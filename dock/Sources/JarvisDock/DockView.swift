@@ -1187,10 +1187,13 @@ private struct MeetingCard: View {
                     .accessibilityLabel(line.text.isEmpty ? "Include new line" : "Include \(line.text)")
                     .accessibilityValue(line.included ? "on" : "off")
                     .accessibilityAddTraits(.isToggle)
-                    // Long lines wrap so you can read them. ⏎ moves down the lines, and on the
-                    // last one adds another; ⌘⏎ saves.
+                    // Long lines wrap in full so you can read them. Capped, an overflowing field
+                    // scrolls inside itself and draws over the gap to the next line; the list's
+                    // own scroll view caps the height instead. ⏎ moves down the lines, and on
+                    // the last one adds another; ⌘⏎ saves.
                     TextField(line.kind == .todo ? "Todo" : "Decision", text: text(of: line), prompt: Text(line.kind == .todo ? "New todo" : "New decision"), axis: .vertical)
-                        .lineLimit(1...3)
+                        .lineLimit(1...)
+                        .fixedSize(horizontal: false, vertical: true)
                         .textFieldStyle(.plain)
                         .focused($focused, equals: line.id)
                         .onSubmit { next(after: line.id) }
