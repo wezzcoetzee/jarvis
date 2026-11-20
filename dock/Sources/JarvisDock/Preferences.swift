@@ -218,6 +218,9 @@ final class SettingsWindow {
             let window = SettingsPanel(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = "Jarvis Settings"
             window.isReleasedWhenClosed = false
+            // Otherwise the window stays on the Space it first opened in (another desktop or a
+            // full-screen app), and opening Jarvis from anywhere else sends you back there.
+            window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
             window.contentView = NSHostingView(rootView: SettingsView(preferences: preferences, vault: vaultSettings))
             window.center()
             self.window = window
