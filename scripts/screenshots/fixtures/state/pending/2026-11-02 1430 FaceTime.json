@@ -4,10 +4,10 @@
   "proposal": {
     "title": "FaceTime with Sam",
     "followUps": [
-      { "task": "Tonight: send Sam the shed roof plan", "alreadyTracked": false },
+      { "task": "Tonight: send Sam the shed roof plan, with the cedar board sizes and where the gutter runs off the back corner", "alreadyTracked": false },
       { "task": "Sat: pick up the ladder from Sam", "alreadyTracked": false },
       { "task": "Order cedar boards for the shed roof", "alreadyTracked": true }
     ],
-    "decisions": ["Felt for the shed roof rather than shingles: half the price"]
+    "decisions": ["Felt for the shed roof rather than shingles: half the price, quicker to lay over a weekend, and Sam has a roll left over from his garage that should cover most of the back slope"]
   }
 }
