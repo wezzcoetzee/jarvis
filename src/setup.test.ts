@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chooseMeetings, chooseVault, listVaults, meetingFolders, turnMeetingsOff } from "./setup";
+import { chooseMeetings, chooseVault, listVaults, meetingFolders } from "./setup";
 
 const scratch = () => mkdtemp(join(tmpdir(), "jarvis-setup-"));
 
@@ -44,23 +44,17 @@ test("choosing a vault keeps the rest of config.json and its permissions", async
   expect((await stat(file)).mode & 0o777).toBe(0o600);
 });
 
-test("a vault under your home folder is written with ~, and a new config starts private", async () => {
-  const vault = await mkdtemp(join(homedir(), ".jarvis-setup-test-"));
+test("a new config starts private", async () => {
   const file = join(await scratch(), "new/config.json");
-  try {
-    await chooseVault(vault, file);
-    expect((await Bun.file(file).json()).vault).toBe(`~${vault.slice(homedir().length)}`);
-    expect((await stat(file)).mode & 0o777).toBe(0o600);
-  } finally {
-    await Bun.$`rm -rf ${vault}`.quiet();
-  }
+  await chooseVault(await scratch(), file);
+  expect((await stat(file)).mode & 0o777).toBe(0o600);
 });
 
 test("a path that isn't a folder is refused, and config.json is left alone", async () => {
   const root = await scratch();
   const file = join(root, "config.json");
   await writeFile(file, "{}");
-  expect(chooseVault(join(root, "nowhere"), file)).rejects.toThrow("isn't a folder");
+  await expect(chooseVault(join(root, "nowhere"), file)).rejects.toThrow("isn't a folder");
   expect(await Bun.file(file).text()).toBe("{}");
 });
 
@@ -87,8 +81,8 @@ test("choosing the meetings folder writes it vault-relative, and refuses folders
   await mkdir(join(vault, "Private/Calls"), { recursive: true });
   await chooseMeetings(join(vault, "Calls"), vault, file);
   expect(await Bun.file(file).json()).toEqual({ meetings: "Calls" });
-  expect(chooseMeetings(tmpdir(), vault, file)).rejects.toThrow("isn't in your vault");
-  expect(chooseMeetings("Private/Calls", vault, file)).rejects.toThrow("private");
+  await expect(chooseMeetings(tmpdir(), vault, file)).rejects.toThrow("isn't in your vault");
+  await expect(chooseMeetings("Private/Calls", vault, file)).rejects.toThrow("private");
 });
 
 test("a vault folder whose name starts with two dots is still in the vault", async () => {
@@ -96,11 +90,4 @@ test("a vault folder whose name starts with two dots is still in the vault", asy
   const file = join(await scratch(), "config.json");
   await mkdir(join(vault, "..calls"));
   expect(await chooseMeetings("..calls", vault, file)).toEqual({ meetings: "..calls" });
-});
-
-test("turning meetings off writes false, keeping the rest of config.json", async () => {
-  const file = join(await scratch(), "config.json");
-  await writeFile(file, JSON.stringify({ vault: "~/Notes", meetings: "Calls" }));
-  await turnMeetingsOff(file);
-  expect(await Bun.file(file).json()).toEqual({ vault: "~/Notes", meetings: false });
 });

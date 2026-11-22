@@ -5,8 +5,7 @@ import { layout, owner, paths, pluginDirs, privateFolders } from "./config";
 import { prune, seal, undo } from "./runs";
 import { localDate } from "./vault";
 
-/** Shown in a speech bubble above the Dock: a headline, a few lines, and links. */
-export const Answer = z.object({
+const Answer = z.object({
   kind: z.enum(["saved", "found", "answer", "question"]),
   message: z.string().describe("The headline: one line under 80 characters that answers or confirms"),
   detail: z
@@ -70,10 +69,8 @@ const hook = `${[...self, "hook"].map((part) => `"${part}"`).join(" ")} || exit 
 // would skip the backup hook. Edit and Write are the only ways to change a note.
 const TOOLS = "Read,Glob,Grep,Edit,Write,Skill";
 
-/** `onStep` gets a short phrase for each thing Claude does, for the Dock to show while it works. */
 export async function ask(text: string, app?: string, onStep?: (step: string) => void) {
   const runId = new Date().toISOString().replace(/[:.]/g, "-");
-  // Housekeeping shouldn't cost you the ask, so a failure here is only logged.
   await prune().catch((error) => console.error(`couldn't clear old runs: ${error}`));
   const tab = app ? await activeTab(app) : null;
   const prompt = `${contextBlock(app, tab)}\n\n<request>\n${text}\n</request>`;
@@ -119,12 +116,9 @@ export async function ask(text: string, app?: string, onStep?: (step: string) =>
     // A run that died part-way through shouldn't leave half its edits behind.
     await seal(runId);
     const { restored } = await undo(runId).catch(() => ({ restored: [] as string[] }));
-    // Said on the detail line, so the headline stays one sentence. `explain` keeps a system
-    // error's plain headline, which rethrowing it as a plain Error would otherwise lose.
+    // `explain` first, so a system error keeps its plain headline instead of becoming a plain Error.
     const { message, detail: why } = explain(error);
     const detail = [restored.length > 0 ? "Your notes were put back" : "", why ?? ""].filter(Boolean).join(". ");
     throw new Error(message, { cause: detail || undefined });
   }
 }
-
-export { undo };

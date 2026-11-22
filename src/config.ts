@@ -15,7 +15,6 @@ export const fold = (path: string) => path.normalize("NFC").toLowerCase();
  */
 const FileConfig = z
   .object({
-    /** The Obsidian vault. `~` is expanded. */
     vault: z.string(),
     /** Your name, as it appears in meeting transcripts and notes. */
     owner: z.string(),

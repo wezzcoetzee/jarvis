@@ -8,7 +8,7 @@ import { readJson, readText, writeAtomic } from "./files";
  * One note a run touched. `at` is when the run first went to edit it, `after` its hash when the
  * run ended (null: deleted).
  */
-export type Entry = { path: string; backup: string | null; at: number; after?: string | null };
+type Entry = { path: string; backup: string | null; at: number; after?: string | null };
 /** Keyed by the note's folded path, so two spellings of one note are one entry. */
 type Manifest = Record<string, Entry>;
 
@@ -61,7 +61,8 @@ export async function seal(runId: string): Promise<string[]> {
  * Deletes runs older than `keepRunsMs`. Each holds full copies of the notes it edited, which
  * otherwise pile up outside the vault and outside whatever sync or retention covers it.
  */
-export async function prune(now = Date.now()): Promise<void> {
+export async function prune(): Promise<void> {
+  const now = Date.now();
   for (const id of await readdir(runsDir).catch(() => [])) {
     if (!RUN_ID.test(id)) continue;
     const { mtimeMs } = await stat(join(runsDir, id));

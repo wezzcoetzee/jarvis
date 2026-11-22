@@ -70,7 +70,6 @@ final class DownloadsStack {
         onChange(true)
     }
 
-    /// The rows sweep back into the tile, then the window goes.
     func close() {
         guard isShown else { return }
         monitors.forEach(NSEvent.removeMonitor)

@@ -37,7 +37,6 @@ async function canonical(path: string): Promise<string> {
   }
 }
 
-/** Runs as `jarvis hook`. Reads the tool call on stdin; exits 0 to allow it, 2 to block it. */
 export async function hook(): Promise<void> {
   try {
     const input = await Bun.stdin.json();
@@ -74,9 +73,8 @@ export async function hook(): Promise<void> {
       return lower === root || lower.startsWith(`${root}/`);
     };
 
-    // Skills from configured plugins may read their own reference files, but never edit them,
-    // even when a plugin folder sits inside the vault.
-    // A plugin folder that's gone (a broken link) just isn't one; it doesn't block every call.
+    // Plugin skills may read their own files but never edit them, even inside the vault. A plugin
+    // folder that's gone (a broken link) is skipped rather than blocking every call.
     const plugins = await Promise.all(pluginDirs.map((dir) => canonical(dir).then(fold, () => null)));
     const inPlugin = plugins.some((dir) => dir !== null && (lower === dir || lower.startsWith(`${dir}/`)));
     if (inPlugin && isEdit) block("Jarvis doesn't edit plugins.");

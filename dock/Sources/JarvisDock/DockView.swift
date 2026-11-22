@@ -28,11 +28,9 @@ extension Color {
     static let edge = ink(0.16, 0.1)
     /// Typing brightens the box's edge, so a focused box reads as focused from across the room.
     static let edgeFocused = ink(0.4, 0.3)
-    /// Around every glass surface.
     static let rim = ink(0.18, 0.1)
     static let divider = ink(0.22, 0.16)
     static let separator = ink(0.1, 0.08)
-    /// Under the row ⏎ or the pointer is on.
     static let rowFill = ink(0.16, 0.08)
     static let runningDot = ink(0.8, 0.55)
     /// The one button per panel that a key presses: white on dark glass, near-black on light.
@@ -49,7 +47,6 @@ extension Color {
     static let waiting = Color(red: 0.69, green: 0.37, blue: 0.03)
     /// "Meetings paused": the failure red, dark enough for white text on it (about 6:1).
     static let paused = Color(red: 0.72, green: 0.16, blue: 0.13)
-    /// The macOS Dock's badge red.
     static let badge = Color(red: 1, green: 0.23, blue: 0.19)
 }
 
@@ -81,12 +78,10 @@ private struct GlassButton: ButtonStyle {
 }
 
 extension View {
-    /// A key that presses something: ⏎, ⌘⏎, ⌘Z. One size and weight wherever one shows.
     func keyHint() -> some View {
         font(.system(size: 11)).opacity(0.75).fixedSize()
     }
 
-    /// A name on a dark capsule: icon names on hover, and the Downloads fan's file names.
     func nameTag(highlighted: Bool = false) -> some View {
         font(.system(size: 12, weight: .medium))
             .lineLimit(1)
@@ -180,7 +175,6 @@ private extension View {
             .contentShape(Capsule())
     }
 
-    /// Rows that slide up one after another when a card opens.
     func stagger(_ index: Int) -> some View {
         modifier(Stagger(index: index))
     }
@@ -206,7 +200,6 @@ struct DockView: View {
     @Bindable var model: DockModel
     let shelf: AppShelf
     let openSettings: () -> Void
-    /// Opens or closes the Downloads fan.
     let openStack: () -> Void
     /// Where each icon (by app id) and the box ("capture") are, in the window, top-left origin.
     let placed: (String, CGRect) -> Void
@@ -287,7 +280,6 @@ struct DockView: View {
                 AppTile(app: app, size: iconSize, badge: shelf.badges[app.id], bounce: app.id == "md.obsidian" ? model.bounce : 0, closes: app.id == "downloads" && shelf.stackOpen) {
                     if app.id == "downloads" { openStack() } else { shelf.open(app) }
                 }
-                // The icon's own menu, like the macOS Dock, instead of Jarvis's.
                 .contextMenu { AppMenu(app: app, shelf: shelf) }
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { placed(app.id, $0) }
             }
@@ -316,10 +308,8 @@ struct DockView: View {
                     .transition(reduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity))
                 }
                 if let pending = model.reviewing {
-                    // Opens and closes the card, like the Downloads tile and its fan.
                     Button { model.toggleReview() } label: {
                         HStack(spacing: 6) {
-                            // While its card is open the pill closes it, like the Downloads tile.
                             Image(systemName: model.reviewOpen ? "chevron.down" : "waveform")
                                 .contentTransition(.symbolEffect(.replace))
                             // Capped, so a long meeting title can't push the icons off the screen.
@@ -456,7 +446,6 @@ private struct CapturePill: View {
             )
             .overlay(alignment: .leading) {
                 if let status {
-                    // Each new step rolls up into place, like a departures board.
                     Text(status)
                         .lineLimit(1)
                         .id(status)
@@ -495,7 +484,6 @@ private struct CapturePill: View {
         }
         .padding(.horizontal, 14)
         .frame(width: width)
-        // Typing also brightens the edge, so a focused box reads as focused from across the room.
         // Hover only tilts the pencil, so the active fill means the box has the keys or is working.
         .capsule(model.isTyping || showsStep ? .pillActive : .pill, edge: model.isTyping ? .edgeFocused : .edge)
         .help(model.working.map(\.text).joined(separator: "\n"))
@@ -526,7 +514,6 @@ private struct Sheet: View {
             }
             let rows = model.rows
             ForEach(Array(rows.enumerated()), id: \.element) { index, row in
-                // What you can do, then what's in the vault.
                 if case .note = row, rows[index - 1] == .inbox {
                     Rectangle().fill(Color.separator).frame(height: 1).padding(.horizontal, 10).padding(.vertical, 3)
                 }
@@ -536,7 +523,6 @@ private struct Sheet: View {
         .padding(6)
         .padding(.bottom, BubbleShape.tail)
         .frame(width: Panel.width)
-        // A tail down at the box, like the bubble's: the sheet is the box's too.
         .bubbleGlass()
         .animation(spring, value: model.selection)
     }
@@ -579,7 +565,6 @@ private struct Sheet: View {
             model.selection = index
             model.submit(command: false)
         } label: {
-            // An app's row shows the app's own icon, as the Dock does.
             NoteRow(icon: icon(row), title: title, hint: hint(index, row), image: appIcon(row)).background {
                 if index == model.selection { NoteRow.fill.matchedGeometryEffect(id: "selection", in: highlight) }
             }
@@ -617,10 +602,8 @@ private struct NoteRow: View {
     let icon: String
     let title: String
     let hint: String
-    /// An app's own icon, in place of the symbol.
     var image: NSImage?
 
-    /// Under the row ⏎ or the pointer is on.
     static let fill = RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.rowFill)
 
     var body: some View {
@@ -891,7 +874,6 @@ private struct AnswerBubble: View {
         }
         .foregroundStyle(Color.body)
         .fixedSize(horizontal: false, vertical: true)
-        // So an answer can be copied.
         .textSelection(.enabled)
         .stagger(1)
     }
@@ -1146,7 +1128,6 @@ private struct MeetingCard: View {
             }
         }
         .frame(width: Panel.width)
-        // A tail down at the pill that opened it, like the answer bubble's at the box.
         .bubbleGlass()
         .onExitCommand(perform: model.closeReview)
         .onAppear(perform: focusFirstLine)
@@ -1430,7 +1411,6 @@ private struct AppTile: View {
         }
     }
 
-    /// The Dock's launch bounce, played once.
     private func hop() {
         guard !reduceMotion else { return }
         withAnimation(.spring(response: 0.22, dampingFraction: 0.55)) { lift = -16 }

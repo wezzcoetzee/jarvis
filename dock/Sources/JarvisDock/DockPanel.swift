@@ -27,7 +27,6 @@ final class DockPanelController {
     private var autohide: Bool { preferences.autoHide }
     private var size = CGSize.zero
     private var shown = true
-    /// The display the Dock is on right now.
     private var screen: NSScreen {
         didSet { model.screenWidth = screen.frame.width }
     }
@@ -275,7 +274,6 @@ final class DockPanelController {
         }
     }
 
-    /// Turning auto-hide off in Settings brings the Dock up and keeps it there.
     private func watchAutoHide() {
         withObservationTracking { _ = preferences.autoHide } onChange: { [weak self] in
             Task { @MainActor in

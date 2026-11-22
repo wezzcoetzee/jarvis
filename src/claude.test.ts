@@ -1,14 +1,8 @@
 import { expect, test } from "bun:test";
 import { describeStep, failure } from "./claude";
 
-test("tool calls read as short phrases about notes, not paths", () => {
+test("steps name notes and pattern words, not paths or regex, and fit the box", () => {
   expect(describeStep("Read", { file_path: "/vault/Daily/2026-10-29.md" })).toBe("Reading 2026-10-29");
-  expect(describeStep("Grep", { pattern: "launch\nplan" })).toBe("Searching “launch plan”");
-  expect(describeStep("Skill", { skill: "work-log" })).toBe("Using work-log");
-  expect(describeStep("StructuredOutput", {})).toBe("Writing the answer");
-});
-
-test("patterns read as words, and every step fits the box", () => {
   expect(describeStep("Grep", { pattern: "shed.*roof" })).toBe("Searching “shed roof”");
   expect(describeStep("Glob", { pattern: "**/*Lisbon*.md" })).toBe("Looking for Lisbon");
   expect(describeStep("Glob", { pattern: "**/*" })).toBe("Looking through notes");

@@ -22,7 +22,6 @@ struct DockApp: Identifiable {
 final class AppShelf {
     private(set) var apps: [DockApp] = []
     private(set) var places: [DockApp] = []
-    /// What "Hidden Apps" on the Dock's own menu lists, running or not.
     private(set) var hiddenApps: [DockApp] = []
     private(set) var trashFull: Bool?
     /// The badge each running app has set on its Dock icon ("2", "•"), by app id. Screenshots

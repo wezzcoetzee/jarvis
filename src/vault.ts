@@ -45,7 +45,7 @@ export function insertInSection(
 
 /** The day as `YYYY-MM-DD` in local time, which is how daily notes are named. */
 export const localDate = (d = new Date()) => d.toLocaleDateString("en-CA");
-export const dailyPath = (date: string) => join(paths.daily, `${date}.md`);
+const dailyPath = (date: string) => join(paths.daily, `${date}.md`);
 export const readDaily = (date: string) => readText(dailyPath(date));
 
 /** A planned edit. Plan everything first, then commit, so a failure never leaves half a capture. */
@@ -78,7 +78,7 @@ export async function planDecisions(decisions: string[], meetingDate: string, no
   return { path: paths.workLog, label: layout.workLog, content: updated };
 }
 
-/** Writes each planned edit atomically. Returns what it wrote, as the vault names it. */
+/** Returns what it wrote, as the vault names it. */
 export async function commit(writes: (Write | null)[]): Promise<string[]> {
   const planned = writes.filter((w) => w !== null);
   for (const { path, content } of planned) await writeAtomic(path, content);
