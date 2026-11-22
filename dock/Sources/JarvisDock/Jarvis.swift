@@ -110,11 +110,10 @@ enum Jarvis {
     }
 }
 
-/// A vault note, from `search` (with a snippet) or from an `ask` result.
+/// A vault note, from `search` or from an `ask` result.
 struct Note: Decodable, Identifiable {
     let path: String
     let title: String
-    var snippet: String?
     var id: String { path }
 
     /// What the Dock calls it: a daily note by its day ("Today's note"), anything else by its title.

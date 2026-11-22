@@ -13,7 +13,7 @@ export async function listRecordings(): Promise<string[]> {
 }
 
 /** Recordings not yet handled whose file has stopped changing. */
-export async function settledRecordings(seen: Set<string>): Promise<string[]> {
+async function settledRecordings(seen: Set<string>): Promise<string[]> {
   const now = Date.now();
   const fresh = (await listRecordings()).filter((name) => !seen.has(name));
   const settled = await Promise.all(

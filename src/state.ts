@@ -59,7 +59,7 @@ export async function saveFailures(failures: Failures): Promise<void> {
   await writeAtomic(failuresPath, JSON.stringify(failures, null, 2));
 }
 
-export type Pending = { noteName: string; meetingDate: string; proposal: Proposal };
+type Pending = { noteName: string; meetingDate: string; proposal: Proposal };
 
 const pendingPath = (noteName: string) => join(pendingDir, `${noteName}.json`);
 

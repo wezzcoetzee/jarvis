@@ -42,10 +42,6 @@ test("returns null when the heading is missing", () => {
   expect(insertInSection(daily, "## Nope", ["x"], "end")).toBeNull();
 });
 
-test("section reads one section's body", () => {
-  expect(section(daily, "## Todo")).toBe("- [ ] first\n- [x] second");
-});
-
 test("a section ends at a top-level heading too", () => {
   expect(section("## Todo\n- [ ] a\n# Archive\n- [ ] old", "## Todo")).toBe("- [ ] a");
 });

@@ -317,7 +317,6 @@ struct Screenshots {
     }
 
     /// The Dock and any window it opened (the Downloads fan), with room for their shadows.
-    /// Windows the Dock opened over the desktop, like the Downloads fan.
     private func shown(besides backdrop: NSWindow) -> [NSWindow] {
         NSApp.windows.filter { $0.isVisible && $0.level >= .statusBar && $0 !== dock.window && $0 !== backdrop }
     }

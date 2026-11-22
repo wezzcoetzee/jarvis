@@ -54,7 +54,6 @@ const noteName = (path: unknown) => clip(basename(String(path ?? ""), ".md"), 16
 /** A Grep or Glob pattern as the words in it: "shed.*roof|felt" reads as "shed roof felt". */
 const words = (pattern: unknown, max: number) => clip(String(pattern ?? "").replace(/\.md\b/gi, " ").replace(/[^\p{L}\p{N}]+/gu, " "), max);
 
-/** Turns a tool call into the few words the Dock shows while Claude works. */
 export function describeStep(tool: string, input: Record<string, unknown>): string {
   switch (tool) {
     case "Read": return `Reading ${noteName(input.file_path)}`;
@@ -79,9 +78,8 @@ type Event = {
 };
 
 /**
- * What the Dock says when `claude -p` fails: a headline you can act on, and on `cause` (which
- * `jarvis` prints as its `detail:` line) what to do about it. Claude Code's own wording goes on
- * `cause` only when the failure isn't one of these; otherwise it repeats the headline in jargon.
+ * A `claude -p` failure as an actionable headline, with what to do on `cause` (the `detail:` line).
+ * Claude Code's own wording goes on `cause` only for unrecognised failures.
  */
 export function failure(stderr: string, killed = false): Error {
   const text = stderr.trim();

@@ -9,14 +9,12 @@ import { RECORDING } from "./meetings";
 /** Where Obsidian keeps its list of vaults. `JARVIS_OBSIDIAN` points elsewhere, for tests and screenshots. */
 const obsidianDir = expand(process.env.JARVIS_OBSIDIAN ?? "~/Library/Application Support/obsidian");
 
-export type Vault = { name: string; path: string };
+type Vault = { name: string; path: string };
 
-/** A path under your home folder, written from `~`, as config.json and Settings show it. */
 const tilde = (path: string) => (path.startsWith(`${homedir()}/`) ? `~${path.slice(homedir().length)}` : path);
 
 type ObsidianJson = { vaults?: Record<string, { path?: unknown; ts?: number } | null> };
 
-/** The vaults Obsidian knows, most recently opened first, without folders that have gone. */
 export async function listVaults(dir = obsidianDir): Promise<Vault[]> {
   const known = await readJson<ObsidianJson>(join(dir, "obsidian.json")).catch(() => null);
   const entries = Object.values(known?.vaults ?? {})
@@ -27,12 +25,7 @@ export async function listVaults(dir = obsidianDir): Promise<Vault[]> {
   return entries.filter((_, index) => present[index]).map(({ path }) => ({ name: basename(path), path }));
 }
 
-/**
- * What first run and Settings need: whether the vault Jarvis would use is there (a vault that
- * moved counts as not set up, so it gets the same help), the vaults Obsidian knows, the meetings
- * folder (null when meetings are off), and whether Claude Code is here for asks. Captures to the
- * Inbox don't need it.
- */
+/** For first run and Settings. A vault that moved counts as not ready, so it gets the same help. */
 export async function setupStatus(): Promise<{
   ready: boolean;
   vault: string;
@@ -65,7 +58,6 @@ async function updateConfig(file: string, changes: Record<string, string | boole
   await writeAtomic(file, `${JSON.stringify(config, null, 2)}\n`, mode);
 }
 
-/** Makes `folder` the vault in config.json. */
 export async function chooseVault(folder: string, file = configFile): Promise<{ vault: string }> {
   const vault = expand(folder);
   if (!(await isFolder(vault))) throw new Error(`${folder} isn't a folder`);
@@ -76,7 +68,7 @@ export async function chooseVault(folder: string, file = configFile): Promise<{ 
 const PRIVATE = privateFolders.map(fold);
 const isPrivate = (folder: string) => PRIVATE.some((root) => fold(folder) === root || fold(folder).startsWith(`${root}/`));
 
-export type MeetingFolder = { folder: string; recordings: number };
+type MeetingFolder = { folder: string; recordings: number };
 
 /**
  * Folders in the vault that already hold call recordings, most first, so first run can offer
@@ -114,7 +106,6 @@ export async function chooseMeetings(folder: string, vault = paths.vault, file =
   return { meetings };
 }
 
-/** Off in Settings: meetings stop, whatever folders exist, until a folder is chosen again. */
 export async function turnMeetingsOff(file = configFile): Promise<{ meetings: null }> {
   await updateConfig(file, { meetings: false });
   return { meetings: null };

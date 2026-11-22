@@ -2,11 +2,11 @@ import { stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { fold, paths, privateFolders } from "./config";
 
-export type Hit = { path: string; title: string; snippet: string };
+type Hit = { path: string; title: string };
 
 // The Dock is on screen during screen shares, so private folders never show up in it.
 const EXCLUDED = privateFolders.map((folder) => `${fold(folder)}/`);
-const SNIPPET = 90;
+const LIMIT = 5;
 
 /**
  * Cloud-synced vaults (OneDrive, iCloud Drive, Dropbox) leave older notes as cloud-only
@@ -19,7 +19,7 @@ async function readIfLocal(file: string): Promise<string | null> {
 }
 
 /** Every term must appear in the note; a filename match ranks above a body match. */
-export async function search(query: string, limit = 5): Promise<Hit[]> {
+export async function search(query: string): Promise<Hit[]> {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (terms.length === 0) return [];
 
@@ -35,13 +35,12 @@ export async function search(query: string, limit = 5): Promise<Hit[]> {
     if (!terms.every((t) => name.includes(t) || lower.includes(t))) continue;
 
     const score = terms.reduce((sum, t) => sum + (name.includes(t) ? 3 : 1), 0);
-    const line = text.split("\n").find((l) => terms.some((t) => l.toLowerCase().includes(t))) ?? "";
-    scored.push({ path, title, snippet: line.trim().slice(0, SNIPPET), score });
+    scored.push({ path, title, score });
   }
 
   return scored
     // Ties go to the later title, so dated notes come newest first.
     .sort((a, b) => b.score - a.score || b.title.localeCompare(a.title))
-    .slice(0, limit)
+    .slice(0, LIMIT)
     .map(({ score: _, ...hit }) => hit);
 }

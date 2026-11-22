@@ -34,9 +34,8 @@ final class DockModel {
         get { picked.flatMap { rows.firstIndex(of: $0) } ?? rows.firstIndex(of: defaultRow) ?? 0 }
         set { picked = rows.indices.contains(newValue) ? rows[newValue] : nil }
     }
-    /// ⏎ asks, as it always has. It opens a matching app only once you've typed the app's whole
-    /// name, so a one-word capture like "music" or "cal" never launches anything by accident.
-    /// Arrowing up to the app row picks it too.
+    /// ⏎ asks, and opens a matching app only once its whole name is typed, so a one-word capture
+    /// like "music" never launches anything by accident. Arrowing up to the app row picks it too.
     private var defaultRow: Row {
         if let app = appMatch, app.name.lowercased() == trimmedQuery.lowercased() { .app(app.id) } else { .ask }
     }
@@ -45,11 +44,9 @@ final class DockModel {
     /// sheet's "Open …" row.
     @ObservationIgnored var apps: () -> [DockApp] = { [] }
     @ObservationIgnored var onOpenApp: (DockApp) -> Void = { _ in }
-    /// The app (or Downloads, or the Trash) you're typing: its whole name first, so "safari"
-    /// is Safari rather than Safari Technology Preview and "activity monitor" can be typed out;
-    /// otherwise one whose name, or a word of it, starts with what you've typed. Two letters or
-    /// more, and a prefix only within one word, so a capture that happens to begin with an app's
-    /// name stops matching at its first space.
+    /// The app (or Downloads, the Trash) you're typing. A whole name wins ("safari" is Safari, not
+    /// Safari Technology Preview); otherwise a prefix of one of its words, from two letters, so a
+    /// capture that merely begins with an app's name stops matching at its first space.
     var appMatch: DockApp? {
         let typed = trimmedQuery.lowercased()
         guard typed.count >= 2, replyingTo == nil else { return nil }
@@ -96,7 +93,6 @@ final class DockModel {
             if meetingsPaused == nil { pausedOpen = false }
         }
     }
-    /// The "Meetings paused" card is open above its pill.
     private(set) var pausedOpen = false
     /// A skipped prompt, held back so Undo can put it back. It's only skipped for real when the
     /// grace runs out (or the next skip comes), so undoing never needs the CLI.
@@ -169,7 +165,6 @@ final class DockModel {
     @ObservationIgnored private var cleared: String?
     /// So "3 matching notes" is said when the count changes, not at every pause in typing.
     @ObservationIgnored private var announcedHits = 0
-    /// Writes that aren't asks give up after this, and say so.
     private static let writeTimeout: TimeInterval = 60
     /// A search stuck on a macOS folder prompt gives up, so the last query's rows don't stay
     /// under new text.
@@ -177,7 +172,6 @@ final class DockModel {
     @ObservationIgnored private var pendingWatcher: DispatchSourceFileSystemObject?
 
     var reviewing: Pending? { pending.first }
-    /// The open prompt's lines.
     var lines: [DraftLine] {
         get { reviewing.flatMap { drafts[$0.id] } ?? [] }
         set { if let id = reviewing?.id { drafts[id] = newValue } }
@@ -193,7 +187,6 @@ final class DockModel {
     }
     var showsSheet: Bool { isTyping && !trimmedQuery.isEmpty && !reviewOpen && !pausedOpen && !setupAsks }
     var showsSetup: Bool { setup != nil && setupOpen && !reviewOpen && !pausedOpen && !showsSheet }
-    /// Requests Claude is still working on, shown as a timer in the box.
     var working: [Activity] { activities.filter(\.isRunning) }
     /// Finished requests, oldest first. The bubble shows the first; the rest wait their turn.
     var answers: [Activity] { activities.filter { !$0.isRunning } }
@@ -849,7 +842,6 @@ final class DockModel {
         }
     }
 
-    /// ⏎ on a setup row, or a click on one.
     func pickSetupRow(_ index: Int) {
         switch setup {
         case .choose(let vaults):
@@ -903,7 +895,6 @@ final class DockModel {
         announce(claudeFound ? "Ready. Type something to remember and press Return." : "Ready. Type something and press Command Return to add it to your Inbox.")
     }
 
-    /// Done on the "try it now" invitation.
     func finishSetup() {
         setup = nil
         reset()
