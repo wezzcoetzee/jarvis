@@ -28,7 +28,7 @@ The capture surface is the Dock itself, always present, so capturing costs no ap
 
 - Used all day, alongside other apps, on one or more displays. The Dock lives on one display at a time and follows the pointer.
 - Often visible during screen shares and calls.
-- Keyboard-first: ⌥Space, ⏎, ⌘⏎, ↑↓, ⎋, ⌘Z, ⌘1 to ⌘3, ⌘E. Every action has a key, and buttons show their keys while the box has focus.
+- Keyboard-first: ⌥Space, ⏎, ⌘⏎, ↑↓, esc, ⌘Z, ⌘1 to ⌘3, ⌘E, ⌘O, ⌘R, ⌥⏎, ⇧⌘⌫, ⌘., ⌘,, ⌥⌘Z, ⌘Q. Every action has a key, and buttons show their keys while the box has focus.
 - Meeting recordings arrive from a call recorder into a meetings folder; the user reviews drafts later from an orange pill in the Dock.
 - Vaults are often cloud-synced (OneDrive, iCloud Drive, Dropbox), so file access can stall on macOS permission prompts.
 
@@ -38,11 +38,12 @@ Dock, capture, find, answers and meeting prompts are one product. None ranks abo
 
 - **Dock:** pinned and running apps, Downloads stack, Trash, badges, hover magnification and names, launch bounce, auto-hide, replacing the macOS Dock while running.
 - **Capture box:** live local search as you type (no AI), ⏎ asks Claude, ⌘⏎ goes to the Inbox as is.
-- **Progress:** live step lines while Claude works, with a timer.
+- **Progress:** live step lines while Claude works, with a timer, and Stop (⌘.) beside it. The box names the ask Stop would stop, and "Stopped “<text>”" offers Undo to put the text back.
 - **Answer bubble:** headline, a few lines, links to notes; Undo; Done, Next, Reply, Try again, Open full answer; queued answers ("1 of 2"); put-away questions and failures.
-- **Meeting prompts:** drafted todos and decisions, editable, include or leave out per line, save, or skip (undoable for 8 seconds). A red "Meetings paused" pill says why when the watcher keeps failing.
-- **First run:** with no vault, the box asks which one (the vaults Obsidian knows), then "Do you record calls?" (vault folders that already hold recordings, or Not now), writes both to config.json (`jarvis setup`), and invites a first capture, pointing at ⌘⏎ when Claude Code isn't installed.
+- **Meeting prompts:** drafted todos and decisions, editable, include or leave out per line, save, or skip (undoable for 8 seconds). A red "Meetings paused" pill says why when the watcher keeps failing, and ⏎ in the empty box opens its card; typing closes it. A recording Claude can't draft still queues as a prompt with no lines, to add by hand, draft again (⌘R) or skip; its title opens the call in Obsidian (⌘O). Save stays dimmed when nothing would be saved. A chosen vault that's missing at login pauses meetings (Try again) instead of reopening first run.
+- **First run:** with no vault, the box asks which one (the vaults Obsidian knows), then "Do you record calls?" (vault folders that already hold recordings, or Not now), writes both to config.json (`jarvis setup`), and invites a first capture, pointing at ⌘⏎ when Claude Code isn't installed. `jarvis setup` reports `configured` once a vault is chosen, so a missing folder isn't first run.
 - **Open apps by name:** typing an app's name in the box puts "Open <app>" on top of the sheet; ⏎ opens it only once the whole name is typed or the row is picked, so ⏎ keeps meaning "ask".
+- **Undo and quit:** ⌥⌘Z or right-click the Dock for Undo Last Change once the 8-second window has passed. ⌘Q or Quit stops running asks (undone, as Stop does) and lets queued writes finish, 10 seconds at most.
 - **Settings:** vault and meetings folder (or meetings off) can be changed any time, with the same choices first run offered.
 - **Appearance:** follows Light and Dark mode, as the macOS Dock does.
 
@@ -52,7 +53,7 @@ Hard constraints (from README "Safety" and CLAUDE.md):
 - Nothing about a particular vault goes in the code; paths, names and private folders come from `~/.config/jarvis/config.json`.
 - Vault writes are append-only and follow each note's existing format. Every AI run can be undone.
 - Private folders never appear on screen, since the Dock is visible during screen shares.
-- Animations play once on change. Nothing redraws at the display's refresh rate; the only repeating motion is the working dots, three times a second, only while Claude works.
+- Animations play once on change. Nothing redraws at the display's refresh rate; the only repeating motion is the working dots, three times a second, only while Claude works (hidden under Reduce Motion).
 - Jarvis never asks for Accessibility, Input Monitoring or Screen Recording permissions.
 
 Terminology: capture box, sheet (the matching notes above the box), bubble (the answer), meeting pill, meeting prompt, put away, Inbox, daily note, Work Log. Daily notes and meetings are named by day ("Today", "Yesterday", "Sun, 8 Nov").
@@ -65,7 +66,7 @@ Terminology: capture box, sheet (the matching notes above the box), bubble (the 
 
 ## Evidence on Hand
 
-- `screenshots/`: every UI state (27 scenes), captured from the real app against fixtures by `scripts/screenshots.sh`.
+- `screenshots/`: every UI state (39 scenes), captured from the real app against fixtures by `scripts/screenshots.sh`.
 - `assets/store/`: six 2880×1800 store images built from those screenshots by `scripts/store.sh`.
 - `scripts/screenshots/fixtures`: a made-up vault, config, prompts and Downloads. Never put real vault content here.
 - Releases: DMG and zip on GitHub Releases. The app is **not notarized**.
@@ -81,6 +82,7 @@ Terminology: capture box, sheet (the matching notes above the box), bubble (the 
 
 ## Accessibility & Inclusion
 
-- Reduce Motion: every animation becomes a short fade with no movement; the auto-hidden Dock fades in place; the launch bounce is skipped.
+- VoiceOver announces new meeting prompts ("couldn't draft" on a failed one), "Meetings paused" and its reason, and starting an ask with how to stop it; Increase Contrast lifts text, edges, rim, divider and separator.
+- Reduce Motion: every animation becomes a short fade with no movement; the auto-hidden Dock fades in place; the launch bounce is skipped; the working dots hide and the timer stays.
 - Fully keyboard-operable, with visible key hints on buttons.
 - No continuously repainting animation.

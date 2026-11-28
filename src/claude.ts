@@ -30,7 +30,7 @@ export function findClaude(): string | null {
 function claudePath(): string {
   const found = findClaude();
   if (!found) {
-    throw new Error("Claude Code isn't installed", { cause: "Install it from claude.com/claude-code, then run claude in Terminal to sign in" });
+    throw new Error("Claude Code isn't installed", { cause: "Install it from claude.com/claude-code, then run claude in Terminal to sign in." });
   }
   return found;
 }
@@ -42,6 +42,8 @@ type Options = {
   timeoutMs?: number;
   /** Called with a short phrase each time Claude uses a tool, e.g. "Reading Team". */
   onStep?: (step: string) => void;
+  /** Aborting stops Claude (SIGTERM), and the run ends in an error. */
+  signal?: AbortSignal;
 };
 
 const clip = (text: string, max: number) => {
@@ -78,18 +80,23 @@ type Event = {
 };
 
 /**
- * A `claude -p` failure as an actionable headline, with what to do on `cause` (the `detail:` line).
- * Claude Code's own wording goes on `cause` only for unrecognised failures.
+ * A `claude -p` failure as an actionable headline, with the next step on `cause` (the `detail:` line).
+ * Claude Code's own wording goes on `cause` only for unrecognised failures. Headlines have no full
+ * stop, as Claude's own have none; the next steps are sentences, so they end with one.
  */
 export function failure(stderr: string, killed = false): Error {
   const text = stderr.trim();
-  // Headlines, so no full stop: they sit in the same slot as Claude's own, which have none.
-  if (killed) return new Error("Claude took too long, so Jarvis stopped it");
-  // No "try again in a minute": the bubble's Try again sits right under it.
-  if (/\b529\b|overloaded/i.test(text)) return new Error("Claude is busy right now");
-  if (/\b429\b|rate.?limit|usage limit/i.test(text)) return new Error("Claude's usage limit is reached for now");
+  if (killed) return new Error("Claude took too long, so Jarvis stopped it", { cause: "Try again, or ask for less at once." });
+  if (/\b529\b|overloaded/i.test(text)) return new Error("Claude is busy right now", { cause: "Try again in a minute." });
+  if (/\b429\b|rate.?limit|usage limit/i.test(text)) {
+    return new Error("Claude's usage limit is reached", { cause: "Try again later, or edit it (⌘E) and press ⌘⏎ to put it in your Inbox." });
+  }
   if (/\b401\b|not logged in|please run \/login|invalid api key/i.test(text)) {
-    return new Error("Claude Code isn't signed in", { cause: "Run claude in Terminal to sign in" });
+    return new Error("Claude Code isn't signed in", { cause: "Run claude in Terminal to sign in." });
+  }
+  // After the specific API errors, which can mention a network in passing.
+  if (/ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|Unable to connect|fetch failed|network|offline/i.test(text)) {
+    return new Error("Can't reach Claude", { cause: "Check your connection, then try again, or edit it (⌘E) and press ⌘⏎ to put it in your Inbox." });
   }
   return new Error("Claude stopped before it finished", { cause: text || undefined });
 }
@@ -98,15 +105,19 @@ export function failure(stderr: string, killed = false): Error {
 export async function runClaude<T extends z.ZodType>(
   schema: T,
   prompt: string,
-  { args, cwd, env = {}, timeoutMs = 2 * 60_000, onStep }: Options,
+  { args, cwd, env = {}, timeoutMs = 2 * 60_000, onStep, signal }: Options,
 ): Promise<z.output<T>> {
   // Claude Code's validator doesn't know zod's draft 2020-12 `$schema` URI; the body is fine without it.
   const { $schema: _, ...jsonSchema } = z.toJSONSchema(schema);
   // Streaming reports each tool call as it happens; the last line is the same result object.
   const format = onStep ? ["--output-format", "stream-json", "--verbose"] : ["--output-format", "json"];
+  const path = claudePath();
+  const baseEnv = await claudeEnv();
+  // Stopped while the environment was being prepared: never start Claude.
+  signal?.throwIfAborted();
   const proc = Bun.spawn(
     [
-      claudePath(), "-p",
+      path, "-p",
       "--model", settings.model,
       ...format,
       "--no-session-persistence",
@@ -115,8 +126,9 @@ export async function runClaude<T extends z.ZodType>(
     ],
     {
       cwd,
-      env: { ...(await claudeEnv()), ...env },
+      env: { ...baseEnv, ...env },
       timeout: timeoutMs,
+      signal,
       stdin: new Response(prompt),
       stdout: "pipe",
       stderr: "pipe",

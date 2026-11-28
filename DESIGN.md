@@ -123,13 +123,6 @@ components:
     rounded: "{rounded.capsule}"
     padding: "0 14px"
     height: "38px"
-  hint-capsule:
-    backgroundColor: "{colors.glass-fill}"
-    textColor: "{colors.ink}"
-    typography: "{typography.label}"
-    rounded: "{rounded.capsule}"
-    width: "88px"
-    height: "20px"
   name-tag:
     backgroundColor: "{colors.name-tag}"
     textColor: "{colors.ink}"
@@ -186,7 +179,7 @@ Ink at stepped opacities over the glass, with status hues and the system badge r
 - **Badge Red** (`badge-red`): the unread badge on app icons. Matches the macOS Dock's badge.
 
 ### Neutral
-- **Secondary Ink** (`ink-secondary`): headers, folders, key hints, timers, placeholder. About 4.5:1 or better on the glass at 11px.
+- **Secondary Ink** (`ink-secondary`): headers, folders, key hints, timers, placeholder, and the neutral notice glyph (`info.circle`: an undo that kept your edit, ⌥Space taken by another app). About 4.5:1 or better on the glass at 11px.
 - **Glass Fill** (`glass-fill`): resting capture box and secondary buttons.
 - **Active Fill** (`glass-fill-active`): the capture box while it has the keys or Claude is working.
 - **Row Highlight** (`glass-fill-row`): under the row that ⏎ or the pointer is on.
@@ -201,7 +194,9 @@ Ink at stepped opacities over the glass, with status hues and the system badge r
 
 **The One Primary Button Rule.** Each panel has at most one primary-fill button (white in Dark mode, near-black in Light). Every other action is a translucent capsule.
 
-**The Dimmed, Not Removed Rule.** A left-out meeting line drops to 0.45 ink rather than disappearing or striking through, so it can be brought back.
+**The Dimmed, Not Removed Rule.** A left-out meeting line's text drops to 0.55 ink (0.65 under Increase Contrast) rather than disappearing or striking through, so it can be brought back. Its destination label stays Secondary Ink, so it stays readable at 11px.
+
+**The Increase Contrast Rule.** With Increase Contrast on, text and edges step up and fills stay put: Secondary Ink goes to 0.9 (Light 0.8), key hints to 0.9, a left-out line to 0.65, the answer body to 0.95 (Light 0.88) and the Edge to 0.4 (Light 0.3). The Rim goes to 0.5 (Light 0.4), the Divider to 0.45 (Light 0.35) and the Separator to 0.3 (Light 0.22), so the shapes the fills define stay findable. The capture field's placeholder follows (0.9, Light 0.8). Every ink goes through `ink(…)` in `DockView.swift`, so a new one says its own step.
 
 ## Typography
 
@@ -227,9 +222,9 @@ The Dock is a single horizontal bar pinned to the bottom edge of one display: ca
 
 - **Fixed widths so nothing jumps.** The capture box is 300px in every state (220px minimum on a narrow display). App icons are 46px with 6px between tiles. On a narrow display the box gives up width first, then icons shrink (24px minimum), as the macOS Dock's do.
 - **Panels are 480px wide**, left-aligned to the box (9px in) or to the meeting pill, and stack 10px above the bar.
-- **Inside panels:** 16px horizontal inset; rows pad 10px by 6px; sheet rows 2px apart; meeting lines 32px minimum height with 8px gaps, scrolling past seven lines.
+- **Inside panels:** 16px horizontal inset; rows pad 10px by 6px; sheet rows 2px apart; meeting lines as tall as their text with one 14px gap between them, scrolling past seven lines.
 - **Controls share a height.** Buttons and note chips are 26px tall so a row of both lines up. Capsules on the bar are 38px.
-- **Glyphs get a fixed 16px column** so the text after them starts in the same place in every state.
+- **Glyphs get a fixed 16px column plus an 8px gap** (`GlyphColumn`, shared by the box, sheet, bubbles and cards), so the text after them starts in the same place in every state.
 - **Widths that change fade instead of reflowing.** The "+1" on the meeting pill stays in the layout and fades, so every icon after it keeps its place.
 
 ## Elevation & Depth
@@ -237,11 +232,15 @@ The Dock is a single horizontal bar pinned to the bottom edge of one display: ca
 Depth comes from the material, not from stacking. The bar and every panel are the same behind-window blur, separated from the desktop by a 0.18 white rim and one soft shadow. There is no tonal layering of surfaces on top of the glass; fills on the glass are translucent white, not darker or lighter panels. Name tags (hover names, Downloads fan) are the exception: small near-opaque capsules (dark in Dark mode, near-white in Light) with no blur and no shadow, as in the macOS Dock. The `.hudWindow` material itself turns light in Light mode; nothing tints it by hand.
 
 ### Shadow Vocabulary
+Each shadow is drawn outside its shape only (`glassShadow`), never under the glass. A shadow on the whole view also falls beneath the translucent fill, and Light glass shows it as a grey band inside the side edges.
+
 - **Bar** (`shadow(color: black 0.3, radius: 10, y: 5)`): the Dock bar and rounded glass surfaces.
 - **Bubble** (`shadow(color: black 0.3, radius: 12, y: 6)`): the sheet, answer bubble and meeting card, a touch higher because they float above the bar.
 - **Small control** (`shadow(color: black 0.35, radius: 3, y: 1)`): the Downloads fan's "open in Finder" button.
 
 ### Named Rules
+**The Shadow Outside Rule.** A glass surface's shadow is masked to everything but its own shape, via `glassShadow`. Never put `.shadow` straight on glass.
+
 **The One Material Rule.** A panel is glass: `.hudWindow` behind-window blur, 0.18 rim, bubble shadow, via `glass(_:)` or `bubbleGlass()`. Never an opaque card, never a hand-tinted translucent rectangle. Name tags are not panels and stay solid capsules.
 
 ## Shapes
@@ -271,20 +270,23 @@ Native and restrained. Controls read as Apple's own HUD controls; nothing is bra
 ### Capture Box (signature)
 - **Style:** 38px capsule, Glass Fill, Edge stroke. Pencil glyph, "Capture or ask" placeholder, "⌥Space" hint at the right.
 - **Typing:** Active Fill and Focused Edge.
-- **Working:** Active Fill; Claude's current step replaces the placeholder and rolls up into place (in from the bottom, out through the top); sparkles glyph hops once per new step; three 4px dots and a timer at the right, "1 more" when others run.
-- **Confirmation:** the outcome glyph (green checkmark for saved) and text ("Added to Inbox") for 4 seconds.
+- **Working:** Active Fill; Claude's current step replaces the placeholder and rolls up into place (in from the bottom, out through the top); sparkles glyph hops once per new step; three 4px dots and a timer at the right, "1 more" when others run. Under Reduce Motion the dots hide and the timer stays. While the box has focus and is empty, the placeholder is the oldest ask's text in quotes (middle-truncated), so you can see which ask Stop would stop.
+- **Stop:** while Claude works, a 26px secondary capsule "Stop" sits beside the timer. With the box focused it carries "⌘." (⌘. reaches it only through the box); under the pointer alone it shows without the key. VoiceOver hears "Stop asking <text>". Text is clipped to 60 characters in the label, flash and tooltip. It stops the oldest ask; the box then flashes "Stopped “<text>”" (middle-truncated) with the `stop.circle` glyph in Secondary Ink (neither saved nor failed) and the Undo capsule, ⌘Z, which puts the ask's text back in the box. VoiceOver hears it with the Undo hint, and starting an ask announces "Asking Jarvis. Press Command Period to stop."
+- **Confirmation:** the outcome glyph (green checkmark for saved) and text ("Added to Inbox") for 4 seconds, or 8 when it offers Undo. "Added to Inbox" and "Saved <meeting>" do: a 26px secondary capsule button, "Undo", at the right. Its ⌘Z hint shows only while the box or the meeting card has the keys, since those are the only places ⌘Z reaches it, and the countdown waits while they do. "Undone" reads "Put back today's note" (or "Put back 3 notes").
+- **Queued:** a write waiting behind a running ask reads "Waiting for Claude to finish", with the same dots and timer.
 - **Hover:** only the pencil tilts (-18°), as if about to write. Fill does not change, so fill always means "has the keys or is working".
 - **First run:** sparkles glyph, "Choose a vault", and "↑↓ ⏎" at the right while the setup bubble is open.
-- **After a skip:** "Skipped <meeting>" with a clickable "Undo ⌘Z" at the right for the 8-second grace.
+- **After a skip:** "Skipped <meeting>" with the same Undo capsule for the 8-second grace. When the name doesn't fit the box it reads just "Skipped".
+- **Failed search:** the sheet puts the error on a line of its own, triangle glyph and 11px secondary text, above its rows.
 
 ### Panels: Sheet, Answer Bubble, Meeting Card
 - **Corner Style:** 18px with tail.
 - **Background:** glass (see Elevation).
 - **Internal Padding:** 16px horizontal, 13px top. The sheet is tighter (6px) because its rows pad themselves.
-- **Answer bubble:** 11px secondary header (status glyph, what you typed, "1 of 2"), 15px semibold headline, optional detail, then note chips and buttons sharing one row when they fit.
-- **Meeting card:** waveform glyph and 15px title, date and "1 of 2" at the right; checkbox lines with their destination ("Today's note", "Work Log") in 11px at the right, and on the focused line a Hint Capsule ("Leave out ⌥⏎" or "Include ⌥⏎", 88×20, overlaid so it never makes the line taller); Skip at the bottom left, Save ⌘⏎ at the bottom right.
-- **Setup bubble:** rises from the box on first run. Sparkles header "Welcome to Jarvis", 15px "Which vault should I use?", then Obsidian's vaults as note rows (folder glyph, name, parent folder and ⏎ at the right) and "Choose another folder…" below a separator. Then, "2 of 2": "Do you record calls?" with the vault's folders that hold recordings (waveform glyph, name, "N recordings"), Choose another folder…, and Not now (⎋) below a separator. Once done: green check and the vault's name, "Ready. Try it now", one line of example, an 11px secondary line pointing at Settings ("Right-click the Dock any time for Settings and every key."), Done ⏎. Without Claude Code the headline becomes "Ready. Try ⌘⏎ for now" and a secondary "Install Claude Code" sits at the left.
-- **Paused card:** rises from the red pill. 15px "Meetings paused", the CLI's line on why (selectable), Open log and Try again ⏎. ⏎ and ⎋ reach it through the box.
+- **Answer bubble:** 11px secondary header (status glyph, what you typed, "1 of 2"), 15px semibold headline, optional detail, then note chips and buttons sharing one row when they fit. A list in the answer puts its bullets and numbers in the glyph column, so item text starts where a note row's does. A failure whose detail names Settings gets a Settings… button beside Try again, as the paused card does.
+- **Meeting card:** waveform glyph and 15px title, date and "1 of 2" at the right; checkbox lines with their destination ("Today's note", "Work Log") in 11px at the right, a left-out line's text dims, its label doesn't. The checkbox sits in the shared glyph column (16px wide, under the header's waveform) with a 24px hit area, and "Add a line" uses the same column. The checkbox is laid out one 13px text line tall (16px), so a line is as tall as its text and the step from one line's baseline to the next is the same wrapped or not, focused or not. The title is a button that opens the call in Obsidian (⌘O hint inline). A call with nothing proposed says "Nothing came out of this call. Add a todo, or skip." as a secondary reason line under the title, past the glyph column, with the empty line below as an ordinary one; one that couldn't be drafted (`draftFailed`) gives "Couldn't draft this call. Read it (⌘O) and add todos here, draft it again (⌘R), or skip." there, in the same 13px secondary detail style as a failure. A blank line is not yet a line: it shows unticked and gets no Leave out or Include. The footer is one row: Skip ⇧⌘⌫ at the far left (secondary; not ⌘⌫, which deletes to the start of the line the caret is in), then one secondary button for the focused line with text, "Leave out ⌥⏎" or "Include ⌥⏎", then, on a draft-failed card, a secondary Draft again ⌘R, and Save ⌘⏎ (primary) at the right. When nothing would be saved Save stays in place at 0.4 opacity and disabled; ⌘⏎ then beeps and a 13px secondary line above the footer says "Nothing to save. Skip with ⇧⌘⌫ if you're done." until the lines change. Lines never carry a button of their own, so a line never grows taller.
+- **Setup bubble:** rises from the box on first run. Sparkles header "Welcome to Jarvis" with "1 of 2", 15px "Which vault should I use?", then Obsidian's vaults as note rows (folder glyph, name, parent folder and ⏎ at the right) and "Choose another folder…" below a separator. A step's detail line under its question (why a choice didn't take) is 13px secondary, like a failure's detail. Then, "2 of 2": "Do you record calls?" with the vault's folders that hold recordings (waveform glyph, name, "N recordings"), Choose another folder…, and Not now (esc) below a separator. Once done: green check and the vault's name, "All set: try it now", one line of example, an 11px secondary line pointing at Settings ("Settings and every key: right-click the Dock or press ⌘,"), Done ⏎. The example line says ⌘⏎ adds it to your Inbox as is. Without Claude Code the headline becomes "All set: your Inbox works now", the line below points at ⌘⏎ ("Asking (⏎) needs Claude Code, which isn't on this Mac yet.") and a secondary "Install Claude Code" sits at the left.
+- **Paused card:** rises from the red pill and is laid out like a failure bubble. An 11px secondary header row (failed triangle, "Meeting watcher"), the CLI's line on why as the 15px semibold headline (selectable), a 13px secondary detail on what to do (up to three lines, selectable), then Settings…, Open log and Try again (primary) at the right. Opening it, by click or by ⏎, gives the box the keys, so Try again always shows ⏎ while the card is open, and ⏎ and esc reach it through the box. The box hides its ⌥Space hint meanwhile, and does the same while the meeting card has the keys. Typing in the box closes the card, so the sheet takes its place.
 
 ### Note Rows
 - **Style:** SF Symbol in Secondary Ink (16px column), title in Body, folder and key hint right-aligned in Label.
@@ -292,25 +294,26 @@ Native and restrained. Controls read as Apple's own HUD controls; nothing is bra
 - **Selected:** Row Highlight capsule (9px radius) slides between rows.
 
 ### Paused Pill
-- **Style:** Paused Red capsule on the bar, before the meeting pill, warning triangle and "Meetings paused" in white 13px medium. Becomes a chevron while its card is open. Leaves by itself once the watcher has stayed up 10 seconds.
+- **Style:** Paused Red capsule on the bar, before the meeting pill, warning triangle and "Meetings paused" in white 13px medium. Shows "⏎" after the label when ⏎ in the empty box would open its card (it comes before a waiting meeting prompt); the hint keeps its room and fades. Becomes a chevron while its card is open. Leaves by itself once the watcher has stayed up 10 seconds. It also shows at login when a chosen vault's folder is missing (first run stays closed), saying so with Try again.
 
 ### Meeting Pill
-- **Style:** Waiting Amber capsule on the bar, waveform glyph, title capped at 140px, "+1" for more waiting. Becomes a chevron while its card is open, and closes it.
+- **Style:** Waiting Amber capsule on the bar, waveform glyph (`waveform.badge.exclamationmark` for a call Claude couldn't draft; VoiceOver adds "couldn't draft"), title capped at 140px, "+1" for more waiting, and "⏎" while the box is focused and empty and ⏎ would open the card. Both keep their room and fade. Becomes a chevron while its card is open, and closes it.
 
 ### App Tiles
 - **Style:** the app's own icon at 46px, 4px running dot below, badge at the top-right in Badge Red.
 - **Hover:** magnifies to 1.16 and lifts 5px; the name appears at once in a Name Tag above.
 - **Launch:** one bounce (16px lift) when an app opens. Skipped with Reduce Motion.
-- **Menus:** right-click gives the macOS Dock's own menu (Open, Keep in Dock, Show in Finder, Hide, Quit). Right-click on the bar itself gives Settings…, Hidden Apps and Quit Jarvis.
+- **Menus:** right-click gives the macOS Dock's own menu (Open, Keep in Dock, Show in Finder, Hide, Quit). Right-click on the bar itself gives Settings…, Hidden Apps, Undo Last Change (⌥⌘Z, shown on the item; it reports in the bubble's words: "Put back …" and "Nothing to undo" show as a short confirmation in the box, "Kept … as is" opens the info bubble with its detail; picking it again while one runs beeps, and while Claude works it says "Can't undo while Claude works") and Quit Jarvis (⌘Q while Jarvis has the keys), which stops running asks and lets queued writes finish first (10 seconds at most), the box reading "Finishing before quitting".
 
 ### Downloads Stack
 - **Tile:** the newest file's icon. While the fan is open the tile becomes a close button: a 10px-radius tile in the solid-control colour (`color(srgb 0.15 0.15 0.15 / 0.92)`, near-white in Light) with a Rim stroke and a 17px semibold ink chevron.down.
+- **Keyboard:** the fan has the keys while open. ↑↓ move a highlight (the Name Tag's highlighted state, as under the pointer) up and down the rows, starting on the first arrow, and ⏎ opens the highlighted row. The pointer takes the highlight back. Esc closes the fan.
 - **Fan:** rows rise from the tile, bottom up, each a Name Tag (highlighted under the pointer, long names truncated in the middle, 270px max) beside the file's 46px Quick Look thumbnail with the small-control shadow. Rows are 54px apart, tilt clockwise 4° plus 1.4° per row, and drift right (index^1.5 × 3.2px) the higher they go, like the macOS Dock's fan.
 - **Last row:** "Open in Finder" (or "N More in Finder") on a 40px disc in the same solid-control colour with a Rim stroke and an ink arrow.forward.circle.fill glyph.
 - **Motion:** opens with the shared spring, 0.022s per row; closes faster (response 0.24, damping 0.95), top row first. Reduce Motion fades the rows in where they belong.
 
 ### Settings
-- A standard titled macOS window ("Jarvis Settings", 420px wide) with a grouped SwiftUI `Form`. First group: Vault and Meetings as native pop-up menus (title, one-line state under it: the vault's path truncated at the head, or "N recordings. Follow-ups are drafted from new ones."), offering what first run offered plus Choose another folder… and, for meetings, Off; a failed change shows in red under them. Second group: three toggles, each with a title and a one-line explanation. Last, "Keys": every shortcut as one compact two-column list (key in secondary, right-aligned; what it does), callout size, so the window fits a 13-inch display. No custom styling, no glass.
+- A standard titled macOS window ("Jarvis Settings", 420px wide) with a grouped SwiftUI `Form`. First group: Vault and Meetings as native pop-up menus (title, a short state under it: the vault's path truncated at the head, or "N recordings. Follow-ups are drafted from new ones."), offering what first run offered plus Choose another folder… and, for meetings, Off; a failed change shows in red under them, and a vault folder that's gone says "Can't find this folder. Move it back, or choose another." under Vault. If `jarvis setup` can't load, its error shows in that red line in place of both rows. Second group: three toggles, each with a title and a short explanation. Last, "Keys": every shortcut as one compact two-column list under four group titles (Capture box, Answers, Meeting prompt, Downloads; 11px medium, secondary), key in secondary and right-aligned, then what it does, callout size, so the window fits a 13-inch display. The empty-box row reads "⏎  Empty box: open the meeting or paused pill"; Meeting prompt also lists ⌘O "Open the call in Obsidian" and ⌘R "Draft again, when Claude couldn't". When another app owns ⌥Space, its row says so in Failed Red. No custom styling, no glass.
 
 ## Do's and Don'ts
 
@@ -329,7 +332,7 @@ Native and restrained. Controls read as Apple's own HUD controls; nothing is bra
 - **Don't** add a color that doesn't mean saved, waiting, failed, paused or unread.
 - **Don't** put more than one primary-fill button in a panel, or hard-code `.white`/`.black` on the glass: use the adaptive tokens.
 - **Don't** set text below 11px, or use a font other than San Francisco.
-- **Don't** add a looping animation. The working dots (three times a second, only while Claude works) are the one repeating motion.
+- **Don't** add a looping animation. The working dots (three times a second, only while Claude works, hidden under Reduce Motion) are the one repeating motion.
 - **Don't** change the capture box's fill on hover; fill means it has the keys or is working.
 - **Don't** reinvent the macOS Dock's behaviors (magnification, bounce, badges, right-click menus). Match them.
 - **Don't** show anything from a `private` folder on screen, in any component.

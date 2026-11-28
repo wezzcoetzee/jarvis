@@ -47,11 +47,23 @@ struct Screenshots {
 
     /// Called before anything loads: without the fixtures a scene would read, show and write to
     /// your real vault, config and Downloads.
+    /// Set isn't enough: each has to be in the temp folder screenshots.sh makes, so variables
+    /// exported for CLI testing can't point a scene at the real vault.
     static func requireFixtures() {
         guard let scene else { return }
-        let unset = fixtures.filter { ProcessInfo.processInfo.environment[$0] == nil }
-        guard !unset.isEmpty else { return }
-        FileHandle.standardError.write(Data("screenshot \(scene): run it from scripts/screenshots.sh (\(unset.joined(separator: ", ")) unset)\n".utf8))
+        // `mktemp -d` uses $TMPDIR, or /tmp without one.
+        let temps = [NSTemporaryDirectory(), "/tmp"].map { URL(filePath: $0).resolvingSymlinksInPath().path + "/" }
+        let env = ProcessInfo.processInfo.environment
+        let wrong = fixtures.filter { name in
+            // First run leaves JARVIS_VAULT empty (unset to the CLI), which falls back to
+            // ~/Documents/Vault: safe only when HOME is the temp folder too.
+            let value = name == "JARVIS_VAULT" && env[name] == "" ? env["HOME"] : env[name]
+            guard let path = value else { return true }
+            let resolved = URL(filePath: path).standardized.resolvingSymlinksInPath().path
+            return !temps.contains { resolved.hasPrefix($0) }
+        }
+        guard !wrong.isEmpty else { return }
+        FileHandle.standardError.write(Data("screenshot \(scene): run it from scripts/screenshots.sh (\(wrong.joined(separator: ", ")) unset or not in a temp folder)\n".utf8))
         exit(1)
     }
 
@@ -70,9 +82,17 @@ struct Screenshots {
             try await pause(1.2) // Every spring and stagger has finished.
             // The panel can lose key to another app mid-scene, which closes an open card or fan,
             // and the shot would show the wrong state. Fail instead, so it gets re-run.
-            if scene == "meeting-prompt" || scene == "meeting-skip", !model.reviewOpen { throw Failure(description: "the card closed before capture; run it again") }
+            if ["meeting-prompt", "meeting-skip", "light-meeting", "draft-failed", "skip-undo"].contains(scene), !model.reviewOpen { throw Failure(description: "the card closed before capture; run it again") }
             if scene == "downloads", !dock.stackShown { throw Failure(description: "the fan closed before capture; run it again") }
+            if ["search", "search-selected"].contains(scene), !model.showsSheet { throw Failure(description: "the box lost focus before capture; run it again") }
+            if scene == "search-selected", !notePicked { throw Failure(description: "the picked note moved before capture; run it again") }
+            if scene == "open-app", !model.showsSheet { throw Failure(description: "the box lost focus before capture (typing \(model.isTyping), query \"\(model.query)\", review \(model.reviewOpen), paused \(model.pausedOpen)); run it again") }
+            if scene == "typing", model.query != "Call Sam about" || !model.isTyping { throw Failure(description: "the box lost its text or focus before capture; run it again") }
+            if scene == "stop", !model.isTyping || model.working.isEmpty { throw Failure(description: "the box lost focus or the ask ended before capture; run it again") }
             if scene == "paused-open", !model.pausedOpen { throw Failure(description: "the card closed before capture; run it again") }
+            // A key pressed on the real keyboard lands in the focused box, and the sheet would
+            // cover the bubble.
+            if scene == "answer-keys", !model.query.isEmpty { throw Failure(description: "something was typed in the box (\"\(model.query)\"); leave the keyboard alone and run it again") }
             if scene == "first-run" || scene.hasPrefix("setup-"), !model.showsSetup { throw Failure(description: "the setup bubble closed before capture; run it again") }
             try capture(window, behind: backdrop)
         } catch {
@@ -81,7 +101,7 @@ struct Screenshots {
             exit(1)
         }
         CGWarpMouseCursorPosition(pointer)
-        NSApp.terminate(nil)
+        AppDelegate.quit()
     }
 
     /// Puts the Dock in the scene's state. Returns a window to capture on its own, if the scene
@@ -95,13 +115,18 @@ struct Screenshots {
         case "hover-icon":
             try hover("com.apple.Notes")
         case "typing":
-            model.requestFocus()
+            // Focused, with text in the box and no results yet to show.
+            try await type("Call Sam about", hits: false)
+            try await until("the box to be typed in") { model.isTyping && model.query == "Call Sam about" }
         case "search":
             try await type("shed")
         case "search-selected":
+            // `type` waits for the hits, so the rows below Inbox exist before the selection moves.
             try await type("shed")
+            try await until("a note to pick") { !model.hits.isEmpty }
             model.move(1)
             model.move(1)
+            try await until("the sheet with a note picked") { model.showsSheet && notePicked }
         case "inbox":
             try await type("Ask Sam about borrowing the ladder", hits: false)
             model.submit(command: true)
@@ -109,6 +134,12 @@ struct Screenshots {
         case "working":
             model.ask("What did I decide about the shed roof?")
             try await until("a step") { model.working.first?.step?.hasPrefix("Searching") == true }
+        case "stop":
+            // While Claude works and the box has focus, Stop ⌘. sits beside the timer.
+            model.ask("What did I decide about the shed roof?")
+            try await until("a step") { model.working.first?.step?.hasPrefix("Searching") == true }
+            model.requestFocus()
+            try await until("the box to have focus") { model.isTyping }
         case "working-two":
             model.ask("What did I decide about the shed roof?")
             model.ask("When is the plumber coming back?")
@@ -149,13 +180,17 @@ struct Screenshots {
         case "answer-keys":
             model.ask(Self.asks["saved"]!)
             try await until("the answer") { !model.answers.isEmpty }
+            // The keys show while the empty box has focus; `run` fails the scene if anything got typed.
             model.requestFocus()
+            try await until("the box to have focus") { model.isTyping }
         case "narrow":
             // A display too narrow for every icon at full size: they shrink to fit.
             model.screenWidth = 760
         case "meeting-pill":
             try await until("the meeting prompt") { model.reviewing != nil }
-        case "meeting-prompt":
+        case "meeting-prompt", "light-meeting", "draft-failed":
+            // `light-meeting` is the same card in Light mode (see `appearance`). `draft-failed`
+            // is a call Claude couldn't draft (scripts/screenshots.sh queues only that one).
             try await until("the meeting prompt") { model.reviewing != nil }
             model.openReview()
         case "meeting-skip":
@@ -175,7 +210,7 @@ struct Screenshots {
             model.clickedAway()
             try await until("the question tucked away") { model.tucked }
         case "first-run":
-            // No vault yet (scripts/screenshots.sh points JARVIS_VAULT nowhere), so the CLI
+            // No vault yet (scripts/screenshots.sh leaves JARVIS_VAULT empty), so the CLI
             // offers the fixture's made-up Obsidian vaults.
             await model.checkSetup()
             try await until("the vaults") { model.setupAsks }
@@ -191,13 +226,15 @@ struct Screenshots {
             model.submit(command: false)
             try await until("the invitation") { if case .ready = model.setup { true } else { false } }
         case "open-app":
-            // Typing an app's name offers it at the top of the sheet.
+            // Typing an app's name offers it at the top of the sheet. The sheet only shows while
+            // the box has focus, which `appMatch` alone doesn't wait for.
             try await type("saf", hits: false)
-            try await until("the app row") { model.appMatch != nil }
+            try await until("the box to be typed in") { model.isTyping }
+            try await until("the app row") { model.showsSheet && model.appMatch != nil }
         case "paused", "paused-open":
             // What `jarvis watch` says when the vault has moved (src/main.ts). A missing meetings
             // folder isn't breakage: the watcher waits for it quietly.
-            model.watcherProblem("Can't find your vault at ~/Documents/Personal")
+            model.watcherProblem("Can't find your vault at ~/Documents/Personal", detail: "Move it back, or choose it again in Settings.")
             if scene == "paused-open" {
                 try await pause(0.3)
                 model.togglePaused()
@@ -221,6 +258,11 @@ struct Screenshots {
             throw Failure(description: "no scene called \(scene)")
         }
         return nil
+    }
+
+    /// ↓↓ from Ask lands on the first note.
+    private var notePicked: Bool {
+        if case .note = model.rows[model.selection] { true } else { false }
     }
 
     /// What each answer scene types. scripts/screenshots/bin/claude answers each one.

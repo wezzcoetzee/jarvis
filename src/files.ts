@@ -6,6 +6,12 @@ export const isFolder = (path: string): Promise<boolean> =>
     () => false,
   );
 
+export const exists = (path: string): Promise<boolean> =>
+  stat(path).then(
+    () => true,
+    () => false,
+  );
+
 export async function readText(path: string): Promise<string | null> {
   const file = Bun.file(path);
   return (await file.exists()) ? file.text() : null;

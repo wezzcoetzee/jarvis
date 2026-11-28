@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { runClaude } from "./claude";
 import { owner } from "./config";
+import { oneLine } from "./text";
 
 export const Proposal = z.object({
   title: z.string().describe('Short label for the meeting, e.g. "Huddle with Sam"'),
@@ -36,7 +37,10 @@ export async function extract({ note, date, people, openTodos }: Context): Promi
 
   // Strips settings, plugins, MCP and the default prompt (~60k tokens down to ~1k) but,
   // unlike --bare, still reads the keychain login, so it works under launchd.
-  return runClaude(Proposal, prompt, {
+  const proposal = await runClaude(Proposal, prompt, {
     args: ["--tools", "", "--strict-mcp-config", "--setting-sources", "", "--disable-slash-commands", "--system-prompt", SYSTEM],
   });
+  // The title goes into every saved todo's `[[note|title]]` link, unreviewed, and anyone on the
+  // call can steer what Claude writes for it.
+  return { ...proposal, title: oneLine(proposal.title, 80) };
 }

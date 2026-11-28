@@ -7,30 +7,44 @@ import SwiftUI
     NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.42, dampingFraction: 0.74)
 }
 
+extension NSAppearance {
+    var isDark: Bool { bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
+    /// Increase Contrast (`NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast`). Asked
+    /// of the appearance, which macOS swaps for its high-contrast twin, so turning it on redraws.
+    var increasesContrast: Bool {
+        let match = bestMatch(from: [.darkAqua, .aqua, .accessibilityHighContrastDarkAqua, .accessibilityHighContrastAqua])
+        return match == .accessibilityHighContrastDarkAqua || match == .accessibilityHighContrastAqua
+    }
+}
+
 /// The Dock follows Light and Dark mode, as the macOS Dock does: white ink on dark glass, black
 /// ink on light glass. Every colour the glass carries comes from here, so the two stay one system.
 extension Color {
     private static func adaptive(dark: NSColor, light: NSColor) -> Color {
-        Color(nsColor: NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light })
+        Color(nsColor: NSColor(name: nil) { $0.isDark ? dark : light })
     }
 
-    private static func ink(_ dark: CGFloat, _ light: CGFloat) -> Color {
-        adaptive(dark: NSColor(white: 1, alpha: dark), light: NSColor(white: 0, alpha: light))
+    /// `increased` is the ink under Increase Contrast: text and edges step up; fills stay put.
+    private static func ink(_ dark: CGFloat, _ light: CGFloat, increased: (dark: CGFloat, light: CGFloat)? = nil) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let alpha = (appearance.increasesContrast ? increased : nil) ?? (dark: dark, light: light)
+            return appearance.isDark ? NSColor(white: 1, alpha: alpha.dark) : NSColor(white: 0, alpha: alpha.light)
+        })
     }
 
     static let ink = ink(1, 0.88)
     /// About 4.5:1 or better on the glass, at 11pt, in both appearances.
-    static let secondary = ink(0.75, 0.6)
+    static let secondary = ink(0.75, 0.6, increased: (0.9, 0.8))
     /// The body of an answer, a step quieter than its headline.
-    static let body = ink(0.82, 0.75)
+    static let body = ink(0.82, 0.75, increased: (0.95, 0.88))
     static let pill = ink(0.14, 0.06)
     static let pillActive = ink(0.22, 0.1)
-    static let edge = ink(0.16, 0.1)
+    static let edge = ink(0.16, 0.1, increased: (0.4, 0.3))
     /// Typing brightens the box's edge, so a focused box reads as focused from across the room.
     static let edgeFocused = ink(0.4, 0.3)
-    static let rim = ink(0.18, 0.1)
-    static let divider = ink(0.22, 0.16)
-    static let separator = ink(0.1, 0.08)
+    static let rim = ink(0.18, 0.1, increased: (0.5, 0.4))
+    static let divider = ink(0.22, 0.16, increased: (0.45, 0.35))
+    static let separator = ink(0.1, 0.08, increased: (0.3, 0.22))
     static let rowFill = ink(0.16, 0.08)
     static let runningDot = ink(0.8, 0.55)
     /// The one button per panel that a key presses: white on dark glass, near-black on light.
@@ -52,8 +66,11 @@ extension Color {
 
 extension NSColor {
     /// The capture field's own text, drawn by AppKit, matching `Color.ink` and `Color.secondary`.
-    static let fieldText = NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .white : NSColor(white: 0, alpha: 0.88) }
-    static let fieldPlaceholder = NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(white: 1, alpha: 0.7) : NSColor(white: 0, alpha: 0.55) }
+    static let fieldText = NSColor(name: nil) { $0.isDark ? .white : NSColor(white: 0, alpha: 0.88) }
+    static let fieldPlaceholder = NSColor(name: nil) { appearance in
+        let more = appearance.increasesContrast
+        return appearance.isDark ? NSColor(white: 1, alpha: more ? 0.9 : 0.7) : NSColor(white: 0, alpha: more ? 0.8 : 0.55)
+    }
 }
 
 /// Every button on the glass: brighter under the pointer (a white button, a touch darker),
@@ -78,8 +95,16 @@ private struct GlassButton: ButtonStyle {
 }
 
 extension View {
+    /// 11pt at 0.75 of whatever ink it sits on (white or black glass, or the primary button), and
+    /// 0.9 under Increase Contrast, where it matches the raised Secondary Ink.
     func keyHint() -> some View {
-        font(.system(size: 11)).opacity(0.75).fixedSize()
+        modifier(KeyHint())
+    }
+
+    /// A key hint on a coloured pill: full white, since 0.75 on orange or red falls short of
+    /// 4.5:1. Its size alone sets it apart from the title.
+    func pillHint() -> some View {
+        font(.system(size: 11)).fixedSize()
     }
 
     func nameTag(highlighted: Bool = false) -> some View {
@@ -90,6 +115,14 @@ extension View {
             .background(Capsule().fill(highlighted ? Color.nameTagHighlighted : Color.nameTag))
             .overlay(Capsule().strokeBorder(Color.edge))
             .foregroundStyle(Color.ink)
+    }
+}
+
+private struct KeyHint: ViewModifier {
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        content.font(.system(size: 11)).opacity(contrast == .increased ? 0.9 : 0.75).fixedSize()
     }
 }
 
@@ -129,6 +162,30 @@ private enum Panel {
     static let inset: CGFloat = 16
 }
 
+/// The one glyph column: every glyph sits in a 16pt frame with the same gap after it, so the text
+/// after a glyph starts at the same x in the box, the sheet, the bubbles and the cards.
+private enum GlyphColumn {
+    static let width: CGFloat = 16
+    static let spacing: CGFloat = 8
+    /// A bubble header's glyph, fixed so a tall one (sparkles) can't push one header lower than
+    /// another.
+    static let headerHeight: CGFloat = 13
+}
+
+/// A glyph in the glyph column, then its title. The title can be several views (a title, a
+/// spacer, "1 of 2"); they share the row.
+private struct GlyphLabel<Glyph: View, Title: View>: View {
+    @ViewBuilder let glyph: Glyph
+    @ViewBuilder let title: Title
+
+    var body: some View {
+        HStack(spacing: GlyphColumn.spacing) {
+            glyph.frame(width: GlyphColumn.width)
+            title
+        }
+    }
+}
+
 /// A rounded rect with a tail at the bottom left, pointing down at the control it came from.
 private struct BubbleShape: Shape {
     static let radius = Panel.radius
@@ -159,13 +216,29 @@ private extension View {
         let caps = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
         return background(Glass(mask: Glass.mask(RoundedRectangle(cornerRadius: radius), caps: caps)))
             .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(Color.rim))
-            .shadow(color: .black.opacity(0.3), radius: 10, y: 5)
+            .glassShadow(RoundedRectangle(cornerRadius: radius), radius: 10, y: 5)
     }
 
     func bubbleGlass() -> some View {
         background(Glass(mask: BubbleShape.mask))
             .overlay(BubbleShape().stroke(Color.rim))
-            .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
+            .glassShadow(BubbleShape(), radius: 12, y: 6)
+    }
+
+    /// The glass's one soft shadow, drawn outside its shape only. A shadow on the whole view
+    /// also falls under the translucent glass, and Light glass shows it as a grey band inside
+    /// the side edges.
+    private func glassShadow(_ shape: some Shape, radius: CGFloat, y: CGFloat) -> some View {
+        background {
+            shape.fill(.black)
+                .shadow(color: .black.opacity(0.3), radius: radius, y: y)
+                // Everything but the shape itself, with room for the shadow's reach.
+                .mask {
+                    Rectangle().padding(-40).overlay(shape.blendMode(.destinationOut)).compositingGroup()
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 
     func capsule(_ fill: Color, edge: Color = .edge) -> some View {
@@ -259,7 +332,7 @@ struct DockView: View {
         if model.reviewOpen, let pending = model.reviewing {
             MeetingCard(model: model, pending: pending)
         } else if model.pausedOpen, let reason = model.meetingsPaused {
-            PausedCard(model: model, reason: reason)
+            PausedCard(model: model, reason: reason, detail: model.pausedDetail)
         } else if model.showsSheet {
             Sheet(model: model)
         } else if model.showsSetup, let setup = model.setup {
@@ -295,22 +368,30 @@ struct DockView: View {
                     // Meetings have stopped prompting: louder than a put-away failure, because
                     // nothing else would tell you, and it goes once they work again.
                     Button { model.togglePaused() } label: {
-                        Label("Meetings paused", systemImage: model.pausedOpen ? "chevron.down" : "exclamationmark.triangle.fill")
-                            .contentTransition(.symbolEffect(.replace))
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 14)
-                            .capsule(.paused)
+                        HStack(spacing: 6) {
+                            Label("Meetings paused", systemImage: model.pausedOpen ? "chevron.down" : "exclamationmark.triangle.fill")
+                                .contentTransition(.symbolEffect(.replace))
+                            // ⏎ in the empty box opens it, before a waiting meeting prompt. It
+                            // keeps its room and fades, like the meeting pill's.
+                            Text("⏎").pillHint().opacity(model.enterOpensPaused ? 1 : 0).accessibilityHidden(true)
+                        }
+                        .animation(spring, value: model.enterOpensPaused)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .capsule(.paused)
                     }
                     .buttonStyle(GlassButton())
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("dock")).minX } action: { pausedX = $0 }
-                    .accessibilityLabel(model.pausedOpen ? "Close" : "Meetings paused")
+                    .accessibilityLabel(model.pausedOpen ? "Close meetings paused" : "Meetings paused")
                     .transition(reduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity))
                 }
                 if let pending = model.reviewing {
                     Button { model.toggleReview() } label: {
                         HStack(spacing: 6) {
-                            Image(systemName: model.reviewOpen ? "chevron.down" : "waveform")
+                            // A call Claude couldn't draft says so before you open it. A glyph,
+                            // not a colour, and it doesn't move.
+                            Image(systemName: model.reviewOpen ? "chevron.down" : pending.draftFailed == true ? "waveform.badge.exclamationmark" : "waveform")
                                 .contentTransition(.symbolEffect(.replace))
                             // Capped, so a long meeting title can't push the icons off the screen.
                             Text(pending.proposal.title).lineLimit(1).frame(maxWidth: 140, alignment: .leading)
@@ -318,8 +399,11 @@ struct DockView: View {
                             // "1 of 2" itself.
                             // It stays in the layout and only fades, so the pill (and every icon
                             // after it) keeps its width.
-                            if model.pending.count > 1 { Text("+\(model.pending.count - 1)").foregroundStyle(.white.opacity(0.8)).opacity(model.reviewOpen ? 0 : 1) }
+                            if model.pending.count > 1 { Text("+\(model.pending.count - 1)").opacity(model.reviewOpen ? 0 : 1) }
+                            // ⏎ in the empty box opens it. Like "+1", it keeps its room and fades.
+                            Text("⏎").pillHint().opacity(model.enterOpensReview ? 1 : 0).accessibilityHidden(true)
                         }
+                        .animation(spring, value: model.enterOpensReview)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14)
@@ -327,8 +411,11 @@ struct DockView: View {
                     }
                     .buttonStyle(GlassButton())
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("dock")).minX } action: { pillX = $0 }
-                    .accessibilityLabel(model.reviewOpen ? "Close review"
-                        : model.pending.count > 1 ? "Review \(pending.proposal.title), and \(model.pending.count - 1) more" : "Review \(pending.proposal.title)")
+                    .accessibilityLabel(model.reviewOpen ? "Close meeting prompt" : [
+                        "Review \(pending.proposal.title)",
+                        pending.draftFailed == true ? "couldn't draft" : nil,
+                        model.pending.count > 1 ? "and \(model.pending.count - 1) more" : nil,
+                    ].compactMap(\.self).joined(separator: ", "))
                     .transition(reduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity))
                 }
                 divider
@@ -348,6 +435,7 @@ struct DockView: View {
         .glass(20)
         .contextMenu {
             Button("Settings…", action: openSettings)
+            Button("Undo Last Change") { model.undoLast() }.keyboardShortcut("z", modifiers: [.option, .command])
             // Hidden apps have no icon to right-click, so this is the way back.
             if !shelf.hiddenApps.isEmpty {
                 Menu("Hidden Apps") {
@@ -355,7 +443,7 @@ struct DockView: View {
                 }
             }
             Divider()
-            Button("Quit Jarvis") { NSApp.terminate(nil) }
+            Button("Quit Jarvis") { AppDelegate.quit() }
         }
         .animation(spring, value: model.pending.map(\.id))
         .animation(spring, value: model.meetingsPaused != nil)
@@ -387,6 +475,8 @@ private struct CapturePill: View {
         case .saved: "checkmark.circle.fill"
         case .skipped: "forward.end"
         case .undone: "arrow.uturn.backward"
+        case .nothing: "info.circle"
+        case .stopped: "stop.circle"
         case nil: tucked?.header.icon ?? (model.working.isEmpty && !model.setupAsks ? "pencil" : "sparkles")
         }
     }
@@ -395,7 +485,14 @@ private struct CapturePill: View {
     /// its header glyph, so a failure stays red while it's out of sight.
     private var tucked: Activity? { model.tucked && !model.isTyping ? model.answers.first : nil }
 
-    private var iconColor: Color { flash == .saved ? .saved : flash == nil ? tucked?.header.color ?? .ink : .ink }
+    private var iconColor: Color {
+        switch flash {
+        case .saved: .saved
+        case .nothing, .stopped: .secondary
+        case .skipped, .undone: .ink
+        case nil: tucked?.header.color ?? .ink
+        }
+    }
 
     /// While Claude works, the box shows its current step instead of the placeholder.
     private var showsStep: Bool { !model.working.isEmpty && model.query.isEmpty && !model.isTyping && model.flash == nil && tucked == nil }
@@ -404,6 +501,7 @@ private struct CapturePill: View {
     /// vault first run needs, Claude's current step, a write under way, or nothing.
     private var status: String? {
         guard model.query.isEmpty else { return nil }
+        if model.quitting { return "Finishing before quitting" }
         if let flash = model.flash { return flash.text }
         if tucked != nil { return model.tuckedSummary }
         if model.busy == nil {
@@ -413,18 +511,32 @@ private struct CapturePill: View {
             default: break
             }
         }
+        // A write queued behind an ask says so, rather than turning up minutes later unexplained.
+        if !model.isTyping, model.busy?.waiting == true, !model.working.isEmpty { return "Waiting for Claude to finish" }
         if showsStep { return model.working.first?.step.map(Day.inline) ?? "Thinking" }
         if !model.isTyping, let busy = model.busy { return busy.text + "…" }
         return nil
     }
 
+    /// The empty, focused box while Claude works names the ask Stop would stop, in quotes, so you
+    /// never stop one you can't see. Typing replaces it as usual.
+    private var placeholder: String {
+        if status != nil { return "" }
+        if model.isTyping, let oldest = model.working.first { return "“\(oldest.text)”" }
+        return "Capture or ask"
+    }
+
+    /// Stop shows while the box has the keys (with ⌘.), or under the pointer while Claude works,
+    /// where ⌘. can't reach it yet, so it goes without its key.
+    private var showsStop: Bool { model.isTyping || hovering }
+
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: GlyphColumn.spacing) {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(iconColor)
                 // A fixed width, so the text after it starts in the same place in every state.
-                .frame(width: 16)
+                .frame(width: GlyphColumn.width)
                 .rotationEffect(.degrees(invites ? -18 : 0))
                 .offset(x: invites ? -1 : 0, y: invites ? -2 : 0)
                 .contentTransition(.symbolEffect(.replace))
@@ -434,7 +546,7 @@ private struct CapturePill: View {
                 .symbolEffect(.bounce, value: reduceMotion ? nil : model.working.first?.step)
             CaptureField(
                 text: $model.query,
-                placeholder: status == nil ? "Capture or ask" : "",
+                placeholder: placeholder,
                 status: status,
                 focusCount: model.captureFocus,
                 // Opening the meeting prompt also makes the panel key; that isn't typing.
@@ -442,12 +554,23 @@ private struct CapturePill: View {
                 onMove: model.move,
                 onSubmit: model.submit,
                 onCancel: model.cancel,
-                onUndo: model.undoBubble
+                onUndo: model.undoBubble,
+                onStop: model.stopAsk,
+                onUndoLast: model.undoLast,
+                onSettings: model.openSettings
             )
             .overlay(alignment: .leading) {
                 if let status {
-                    Text(status)
-                        .lineLimit(1)
+                    ViewThatFits(in: .horizontal) {
+                        Text(status).lineLimit(1)
+                        // Too long for the box: a skip says just "Skipped" rather than cut into
+                        // the meeting's name (the card you left was titled with it). Other
+                        // confirmations are cut in the middle, so both ends show; steps keep
+                        // their start.
+                        Text(model.flash?.kind == .skipped ? "Skipped" : status)
+                            .lineLimit(1)
+                            .truncationMode(model.flash == nil ? .tail : .middle)
+                    }
                         .id(status)
                         // The field's placeholder value carries it for VoiceOver.
                         .accessibilityHidden(true)
@@ -462,23 +585,24 @@ private struct CapturePill: View {
             // The timer stays while you type the next thing, or read a confirmation, so the
             // first request isn't forgotten.
             if let oldest = model.working.first {
-                WorkingBeat(started: oldest.started, more: model.working.count - 1, dots: width >= 260)
-            } else if model.skipping != nil, model.query.isEmpty {
-                // A skip waits out its grace here, so it can be taken back with a click too.
-                Button(action: model.undoSkip) {
-                    HStack(spacing: 6) {
-                        Text("Undo").font(.system(size: 11, weight: .medium))
-                        Text("⌘Z").keyHint()
-                    }
-                    .contentShape(Rectangle())
+                // ⌘. reaches it only through the box, so its hint shows only then, like Undo's ⌘Z.
+                WorkingBeat(started: oldest.started, more: model.working.count - 1, dots: width >= 260 && !showsStop)
+                if showsStop {
+                    button("Stop", hint: model.isTyping ? "⌘." : nil, label: "Stop asking \(oldest.text.clipped())") { _ = model.stopAsk() }
+                        .padding(.trailing, -8)
                 }
-                .buttonStyle(GlassButton())
-                .accessibilityLabel("Undo skip")
+            } else if model.query.isEmpty, model.flash?.undo != nil || model.skipping != nil {
+                // An Inbox add or meeting save while it shows, or a skip waiting out its grace,
+                // can be taken back here with a click too. ⌘Z reaches it only through the box or
+                // the meeting card, so the hint shows only then. Inset as far from the box's edge
+                // as from its top.
+                button("Undo", hint: model.isTyping || model.reviewOpen ? "⌘Z" : nil) { model.undoInBox() }
+                    .padding(.trailing, -8)
             } else if let busy = model.busy, model.flash == nil {
                 WorkingBeat(started: busy.started, dots: width >= 260)
             } else if model.setupAsks, model.setupOpen, model.flash == nil {
                 Text("↑↓ ⏎").keyHint()
-            } else if !model.isTyping, model.flash == nil {
+            } else if !model.isTyping, !model.pausedOpen, !model.reviewOpen, model.flash == nil {
                 Text("⌥Space").font(.system(size: 11)).foregroundStyle(invites ? Color.ink : Color.secondary)
             }
         }
@@ -486,10 +610,11 @@ private struct CapturePill: View {
         .frame(width: width)
         // Hover only tilts the pencil, so the active fill means the box has the keys or is working.
         .capsule(model.isTyping || showsStep ? .pillActive : .pill, edge: model.isTyping ? .edgeFocused : .edge)
-        .help(model.working.map(\.text).joined(separator: "\n"))
+        .help(model.working.map { $0.text.clipped() }.joined(separator: "\n"))
         .onTapGesture { model.requestFocus() }
         .onHover { hovering = $0 }
         .animation(spring, value: invites)
+        .animation(spring, value: showsStop)
         .animation(spring, value: model.isTyping)
         .animation(spring, value: showsStep)
         .animation(spring, value: model.flash)
@@ -504,7 +629,17 @@ private struct Sheet: View {
         VStack(spacing: 2) {
             // Replying to a question: keep it in sight while you type the answer.
             if let question = model.replyingTo {
-                Label(question, systemImage: "questionmark.circle")
+                GlyphLabel { Image(systemName: "questionmark.circle") } title: { Text(question) }
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.secondary)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+            }
+            // A search that failed says why, quietly: Ask and the Inbox still work.
+            if let error = model.searchError, model.replyingTo == nil {
+                GlyphLabel { Image(systemName: "exclamationmark.triangle") } title: { Text(error) }
                     .font(.system(size: 11))
                     .foregroundStyle(Color.secondary)
                     .lineLimit(2)
@@ -552,7 +687,7 @@ private struct Sheet: View {
     private func icon(_ row: DockModel.Row) -> String {
         switch row {
         case .app: "app"
-        case .ask: "sparkles"
+        case .ask: model.replyingTo == nil ? "sparkles" : "arrowshape.turn.up.left"
         case .inbox: "tray.and.arrow.down"
         case .note: "doc.text"
         case .search: "magnifyingglass"
@@ -584,7 +719,8 @@ extension Activity {
     /// bubble is put away.
     var header: (icon: String, color: Color, spoken: String) {
         switch state {
-        case .failed where neutral: ("arrow.uturn.backward", Color.secondary, "Not undone")
+        // Nothing went wrong: an undo that left your edit alone, ⌥Space taken by another app.
+        case .failed where neutral: ("info.circle", Color.secondary, "Notice")
         case .failed, .running: ("exclamationmark.triangle.fill", Color.failed, "Failed")
         case .done(let result):
             switch result.kind {
@@ -607,11 +743,9 @@ private struct NoteRow: View {
     static let fill = RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.rowFill)
 
     var body: some View {
-        HStack(spacing: 10) {
-            Group {
-                if let image { Image(nsImage: image).resizable().frame(width: 16, height: 16) } else { Image(systemName: icon).foregroundStyle(Color.secondary) }
-            }
-            .frame(width: 16)
+        GlyphLabel {
+            if let image { Image(nsImage: image).resizable().frame(width: 16, height: 16) } else { Image(systemName: icon).foregroundStyle(Color.secondary) }
+        } title: {
             Text(title).lineLimit(1)
             Spacer(minLength: 12)
             Text(hint).keyHint()
@@ -630,16 +764,19 @@ private extension [Note] {
 }
 
 /// Three dots lighting in turn, and the elapsed time. Redraws three times a second, and only
-/// while Claude is working, so it never runs at the display's full refresh rate.
+/// while Claude is working, so it never runs at the display's full refresh rate. Without the
+/// dots (Reduce Motion, or no room) only the timer ticks, once a second.
 private struct WorkingBeat: View {
     let started: Date
     /// Other requests still running behind the oldest.
     var more = 0
     /// Off in a narrow box, to leave the step room; the timer still says it's working.
     var dots = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.periodic(from: started, by: 1.0 / 3)) { context in
+        let dots = dots && !reduceMotion
+        TimelineView(.periodic(from: started, by: dots ? 1.0 / 3 : 1)) { context in
             let beat = Int(context.date.timeIntervalSince(started) * 3) % 3
             HStack(spacing: 6) {
                 if dots { HStack(spacing: 3) {
@@ -665,19 +802,21 @@ private struct WorkingBeat: View {
 
 /// Claude's answer, rising out of the box in a speech bubble. It stays until it's dismissed or
 /// you click somewhere else; saves confirm and go by themselves. With the box focused and
-/// empty, ⏎ and esc dismiss it and ⌘Z undoes it, and the buttons show those keys.
+/// empty, ⏎ presses its white button, esc dismisses it and ⌘Z undoes it, and the buttons show
+/// those keys.
 private struct AnswerBubble: View {
     @Bindable var model: DockModel
     let activity: Activity
 
     /// The keys only reach the bubble through the box, so they're shown only while it has them.
-    private var keys: Bool { model.isTyping && model.query.isEmpty }
+    private var keys: Bool { model.boxHasKeys }
     @State private var hoveredNote: Note.ID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: header.icon).foregroundStyle(header.color).frame(width: 16).accessibilityLabel(header.spoken)
+            GlyphLabel {
+                Image(systemName: header.icon).foregroundStyle(header.color).frame(height: GlyphColumn.headerHeight).accessibilityLabel(header.spoken)
+            } title: {
                 // A failure holds the only copy of what you typed, so more of it shows.
                 Text(activity.text).lineLimit(activity.isFailed ? 3 : 1)
                 Spacer(minLength: 12)
@@ -717,11 +856,11 @@ private struct AnswerBubble: View {
         .onDisappear { model.bubbleHovered = false }
         // ⌘1 to ⌘3 open the note chips, and ⌘E edits a failure, while the box has the keys.
         .background {
-            if keys, activity.primary == .retry {
+            if keys, activity.primary == .retry, activity.editable {
                 Button("") { model.edit(activity.id) }.keyboardShortcut("e", modifiers: .command).hidden()
             }
             if keys, case .done(let result) = activity.state {
-                ForEach(Array(result.notes.prefix(3).enumerated()), id: \.offset) { index, note in
+                ForEach(Array(result.links.prefix(3).enumerated()), id: \.offset) { index, note in
                     Button("") { model.open(note) }.keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command).hidden()
                 }
             }
@@ -737,9 +876,7 @@ private struct AnswerBubble: View {
         case .failed(let message):
             headline(message).lineLimit(4)
             // What the CLI said, for when the headline isn't enough.
-            if let detail = activity.detail {
-                Text(detail).font(.system(size: 11)).foregroundStyle(Color.secondary).lineLimit(3).textSelection(.enabled).stagger(1)
-            }
+            if let detail = activity.detail { failureDetail(detail) }
         case .done(let result):
             headline(result.message).lineLimit(3)
             // Claude is asked for six lines; anything much longer scrolls rather than growing the
@@ -795,14 +932,15 @@ private struct AnswerBubble: View {
     /// or the row doesn't fit; otherwise they get a row of their own and only the long titles
     /// shorten.
     @ViewBuilder private func chips(fit: Bool) -> some View {
-        if case .done(let result) = activity.state, result.kind != .found, !result.notes.isEmpty {
+        if case .done(let result) = activity.state, result.kind != .found, !result.links.isEmpty {
             HStack(spacing: 6) {
-                ForEach(Array(result.notes.prefix(3).enumerated()), id: \.element.id) { index, note in
+                ForEach(Array(result.links.prefix(3).enumerated()), id: \.element.id) { index, note in
                     Button { model.open(note) } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "doc.text").foregroundStyle(Color.secondary)
-                            Text(note.name)
-                            if keys { Text("⌘\(index + 1)").keyHint() }
+                        GlyphLabel { Image(systemName: "doc.text").foregroundStyle(Color.secondary) } title: {
+                            HStack(spacing: 6) {
+                                Text(note.name)
+                                if keys { Text("⌘\(index + 1)").keyHint() }
+                            }
                         }
                         .lineLimit(1)
                         .fixedSize(horizontal: fit, vertical: false)
@@ -830,22 +968,26 @@ private struct AnswerBubble: View {
                 }
                 if result.kind == .found { button("Search in Obsidian") { model.openSearch(result.search.flatMap { $0.isEmpty ? nil : $0 } ?? activity.text) } }
             }
-            // Done or Next only for what went fine; ⎋, and a failure's only button, say Dismiss.
+            // Done or Next only for what went fine; esc, and a failure's only button, say Dismiss.
             let done = activity.isFailed && !activity.neutral ? "Dismiss" : model.answers.count > 1 ? "Next" : "Done"
+            // Dismiss is what esc presses, and like esc keeps what you typed for ⌘Z.
+            let dismiss = button("Dismiss", hint: keys ? "esc" : nil) { model.dismissKeepingText(activity) }
             // The white button is what ⏎ presses (DockModel.primary).
             switch activity.primary {
             case .reply:
-                button("Dismiss", hint: keys ? "⎋" : nil) { model.dismiss(activity.id) }
+                dismiss
                 button("Reply", hint: keys ? "⏎" : nil, primary: true) { model.edit(activity.id) }
             case .retry:
-                // This bubble holds the only copy of what you typed: Edit keeps it, Dismiss
-                // (⎋) is the deliberate way to let it go.
-                button("Dismiss", hint: keys ? "⎋" : nil) { model.dismiss(activity.id) }
-                button("Edit", hint: keys ? "⌘E" : nil) { model.edit(activity.id) }
+                // This bubble holds the only copy of what you typed: Edit keeps it in the box,
+                // Dismiss keeps it only for ⌘Z.
+                dismiss
+                // A next step that names Settings ("choose it again in Settings") gets the way there.
+                if activity.detail?.contains("Settings") == true { button("Settings…", action: model.openSettings) }
+                if activity.editable { button("Edit", hint: keys ? "⌘E" : nil) { model.edit(activity.id) } }
                 button("Try again", hint: keys ? "⏎" : nil, primary: true) { model.retry(activity.id) }
             case .open:
                 // Too long for the bubble: the note that holds it, opened when you ask.
-                button("Dismiss", hint: keys ? "⎋" : nil) { model.dismiss(activity.id) }
+                dismiss
                 button("Open full answer", hint: keys ? "⏎" : nil, primary: true) { model.primary(activity) }
             case .dismiss:
                 button(done, hint: keys ? "⏎" : nil, primary: true) { model.dismiss(activity.id) }
@@ -858,13 +1000,14 @@ private struct AnswerBubble: View {
         Text(text).font(.system(size: 15, weight: .semibold)).fixedSize(horizontal: false, vertical: true).stagger(1)
     }
 
-    /// Claude writes lists as "- item" or "1. item"; wrapped lines hang under the text.
+    /// Claude writes lists as "- item" or "1. item"; wrapped lines hang under the text. The
+    /// bullet or number sits in the glyph column, so an item's text starts where a note row's does.
     private func paragraph(_ text: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(text.split(separator: "\n", omittingEmptySubsequences: false).enumerated()), id: \.offset) { _, line in
                 if let item = line.firstMatch(of: #/^(-|\d+\.) (.*)/#) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(item.1 == "-" ? "•" : item.1).monospacedDigit()
+                    HStack(alignment: .firstTextBaseline, spacing: GlyphColumn.spacing) {
+                        Text(item.1 == "-" ? "•" : item.1).monospacedDigit().fixedSize().frame(width: GlyphColumn.width)
                         Text(item.2)
                     }
                 } else {
@@ -905,7 +1048,7 @@ private struct SetupBubble: View {
     }
 
     @ViewBuilder private func choose(_ vaults: [Vault]) -> some View {
-        header("sparkles", "Welcome to Jarvis", color: .secondary)
+        header("sparkles", "Welcome to Jarvis", color: .secondary, step: "1 of 2")
         Text("Which vault should I use?").font(.system(size: 15, weight: .semibold)).stagger(1)
         // A choice that didn't take says why, in the CLI's words, where the hint was.
         hint(vaults.isEmpty ? "Obsidian doesn't list a vault on this Mac. Choose the folder your notes are in." : "Found in Obsidian.")
@@ -923,7 +1066,7 @@ private struct SetupBubble: View {
     }
 
     /// First run's second question. Folders that already hold recordings come first, so it's
-    /// usually one ⏎; Not now (⎋) leaves meetings to start whenever their folder appears.
+    /// usually one ⏎; Not now (esc) leaves meetings to start whenever their folder appears.
     @ViewBuilder private func meetings(_ vault: Vault, _ folders: [MeetingFolder]) -> some View {
         header("checkmark.circle.fill", vault.name, color: .saved, step: "2 of 2")
         Text("Do you record calls?").font(.system(size: 15, weight: .semibold)).stagger(1)
@@ -936,17 +1079,18 @@ private struct SetupBubble: View {
             }
             row(folders.count, icon: "plus", title: folders.isEmpty ? "Choose a folder…" : "Choose another folder…")
             separator
-            row(folders.count + 1, icon: "forward.end", title: "Not now", detail: "⎋")
+            row(folders.count + 1, icon: "forward.end", title: "Not now", detail: "esc")
         }
         .padding(.horizontal, -10)
         .padding(.top, 4)
         .stagger(2)
     }
 
-    /// Under the question, or, when a choice didn't take, why, in the CLI's words.
+    /// Under the question, or, when a choice didn't take, why, in the CLI's words. Body size, like
+    /// a failure's detail: it's the sentence that explains the choice.
     private func hint(_ text: String) -> some View {
         Text(model.setupError ?? text)
-            .font(.system(size: 11))
+            .font(.system(size: 13))
             .foregroundStyle(model.setupError == nil ? Color.secondary : Color.failed)
             .fixedSize(horizontal: false, vertical: true)
             .stagger(1)
@@ -958,18 +1102,21 @@ private struct SetupBubble: View {
 
     @ViewBuilder private func ready(_ vault: Vault) -> some View {
         header("checkmark.circle.fill", vault.name, color: .saved)
-        // Without Claude Code, lead with what works today: ⌘⏎ to the Inbox needs no AI.
-        Text(model.claudeFound ? "Ready. Try it now" : "Ready. Try ⌘⏎ for now").font(.system(size: 15, weight: .semibold)).stagger(1)
+        // Without Claude Code, lead with what works today: the Inbox needs no AI. Keys stay out of
+        // the headline (the One Key Hint Rule); the lines below name them.
+        Text(model.claudeFound ? "All set: try it now" : "All set: your Inbox works now").font(.system(size: 15, weight: .semibold)).stagger(1)
         Text(model.claudeFound
-            ? "Type something you'd hate to forget, like “call Sam on Friday about the roof”, and press ⏎. ⌘⏎ drops it in your Inbox as is."
+            ? "Type something you'd hate to forget, like “call Sam on Friday about the roof”, and press ⏎. ⌘⏎ adds it to your Inbox as is."
             : "Type something you'd hate to forget and press ⌘⏎: it goes to your Inbox as is. Asking (⏎) needs Claude Code, which isn't on this Mac yet.")
             .foregroundStyle(Color.body)
             .fixedSize(horizontal: false, vertical: true)
             .stagger(1)
-        // The one place first run's answers and the full list of keys live afterwards.
-        Text("Right-click the Dock any time for Settings and every key.")
+        // The one place first run's answers and the full list of keys live afterwards. 11pt
+        // Secondary Ink is the key hint's own size and ink, so ⌘, reads as one.
+        Text("Settings and every key: right-click the Dock or press ⌘,")
             .font(.system(size: 11))
             .foregroundStyle(Color.secondary)
+            .fixedSize(horizontal: false, vertical: true)
             .stagger(1)
         HStack {
             if !model.claudeFound {
@@ -983,8 +1130,7 @@ private struct SetupBubble: View {
     }
 
     private func header(_ icon: String, _ title: String, color: Color, step: String? = nil) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon).foregroundStyle(color).frame(width: 16).accessibilityHidden(true)
+        GlyphLabel { Image(systemName: icon).foregroundStyle(color).frame(height: GlyphColumn.headerHeight).accessibilityHidden(true) } title: {
             Text(title)
             if let step {
                 Spacer()
@@ -1018,23 +1164,34 @@ private struct SetupBubble: View {
 // MARK: Meetings paused
 
 /// Why meeting prompts stopped, rising out of the red pill that opened it, with the way back.
+/// Laid out like a failure in the answer bubble: header, headline, then what to do.
 private struct PausedCard: View {
     @Bindable var model: DockModel
+    /// The CLI's own lines on what's wrong (src/main.ts `watch`), selectable so they can be copied.
     let reason: String
+    let detail: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Meetings paused").font(.system(size: 15, weight: .semibold)).stagger(0)
-            // The CLI's own line on what's wrong (src/main.ts `watch`), so it can be copied.
+            GlyphLabel { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.failed).accessibilityLabel("Failed") } title: {
+                Text("Meeting watcher")
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(Color.secondary)
+            .stagger(0)
             Text(reason)
-                .foregroundStyle(Color.body)
-                .lineLimit(4)
+                .font(.system(size: 15, weight: .semibold))
+                .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .stagger(1)
+            if let detail { failureDetail(detail) }
             HStack(spacing: 8) {
                 Spacer()
+                // A vault or meetings folder that moved is usually fixed there.
+                button("Settings…", action: model.openSettings)
                 button("Open log", action: model.openWatchLog)
+                // The box has the keys whenever this is open (DockModel.togglePaused), so ⏎ shows.
                 button("Try again", hint: "⏎", primary: true, action: model.retryWatcher)
             }
             .padding(.top, 6)
@@ -1044,7 +1201,7 @@ private struct PausedCard: View {
         .padding(.top, 13)
         .padding(.bottom, 13 + BubbleShape.tail)
         .frame(width: Panel.width, alignment: .leading)
-        // ⏎ and ⎋ reach it through the box, which keeps the keys (DockModel.submit and cancel).
+        // ⏎ and esc reach it through the box, while it has the keys (DockModel.submit and cancel).
         .bubbleGlass()
     }
 }
@@ -1056,23 +1213,45 @@ private struct MeetingCard: View {
     let pending: Pending
     @FocusState private var focused: UUID?
 
+    /// A line's text (13pt), which the checkbox is laid out to match, so every line is as tall
+    /// as its text and one gap sets the rhythm: the same baseline-to-baseline step between any
+    /// two lines, wrapped or not, focused or not.
+    private static let font = NSFont.systemFont(ofSize: 13)
+    private static let lineHeight = (font.ascender - font.descender + font.leading).rounded(.up)
+    /// Room between lines, so wrapped ones read as one and don't run into the next.
+    private static let lineGap: CGFloat = 14
     /// More lines than this scroll, so Save and Skip never leave the screen.
-    private static let lineHeight: CGFloat = 32
-    /// Room between lines, so wrapped ones don't run into the next.
-    private static let lineGap: CGFloat = 8
     private static let maxHeight = 7 * lineHeight + 6 * lineGap
-    /// A left-out line's text and destination, dimmer than secondary text so it reads as off.
-    private static let leftOut = 0.45
-    /// Room for "Leave out ⌥⏎", the longer of the two hints, so ⌥⏎ never moves the label.
-    private static let hintWidth: CGFloat = 88
+    /// A left-out line's text, dimmer than secondary text so it reads as off. Under Increase
+    /// Contrast it steps up with the other inks.
+    @Environment(\.colorSchemeContrast) private var contrast
+    private var leftOut: Double { contrast == .increased ? 0.65 : 0.55 }
     /// Lines wrap, so whether they overflow is a matter of height, not count.
     @State private var rowsHeight: CGFloat = 0
+    /// The line you were last on, which the footer's Leave out / Include acts on. Kept when a
+    /// click on that button takes focus from the line.
+    @State private var current: DraftLine.ID?
+    /// ⌘⏎ with nothing to save: the footer says so, and how to skip, until the lines change.
+    @State private var nothingToSave = false
+
+    private var currentLine: DraftLine? { model.lines.first { $0.id == (focused ?? current) } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
+            GlyphLabel {
                 Image(systemName: "waveform").font(.system(size: 13)).foregroundStyle(Color.secondary).accessibilityHidden(true)
-                Text(pending.proposal.title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+            } title: {
+                // The title opens the call, so todos can be written from it or a line checked.
+                Button { model.openCall(pending) } label: {
+                    HStack(spacing: 6) {
+                        Text(pending.proposal.title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                        Text("⌘O").keyHint()
+                    }
+                }
+                .buttonStyle(GlassButton())
+                .keyboardShortcut("o", modifiers: .command)
+                .accessibilityLabel("Open the call")
+                .accessibilityValue(pending.proposal.title)
                 Spacer(minLength: 12)
                 Text(model.pending.count > 1 ? "\(pending.meetingDay) · 1 of \(model.pending.count)" : pending.meetingDay)
                     .font(.system(size: 11))
@@ -1081,6 +1260,15 @@ private struct MeetingCard: View {
             .padding(.horizontal, Panel.inset)
             .padding(.top, 12)
             .padding(.bottom, 6)
+
+            // Why there's nothing to review, for as long as the card is open; the line below
+            // is an ordinary empty one. Under the title, past the glyph column.
+            if let reason {
+                failureDetail(reason)
+                    .padding(.leading, Panel.inset + GlyphColumn.width + GlyphColumn.spacing)
+                    .padding(.trailing, Panel.inset)
+                    .padding(.bottom, 8)
+            }
 
             // Always a scroll view, capped, so crossing the cap never rebuilds the rows. Its bar
             // only shows once there's something to scroll.
@@ -1098,33 +1286,78 @@ private struct MeetingCard: View {
 
             Button {
                 // An empty last line is already the new line.
-                if model.lines.last?.text.trimmingCharacters(in: .whitespaces).isEmpty != true { model.addLine() }
+                if model.lines.last?.isBlank != true { model.addLine() }
                 focused = model.lines.last?.id
             } label: {
-                Label("Add a line", systemImage: "plus")
+                // The whole row takes the click, not only the glyph and the words.
+                GlyphLabel { Image(systemName: "plus") } title: { Text("Add a line") }
+                    .frame(maxWidth: .infinity, minHeight: Control.height, alignment: .leading)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(GlassButton())
             .foregroundStyle(Color.secondary)
             .padding(.horizontal, Panel.inset)
             .padding(.vertical, 6)
 
+            if nothingToSave {
+                Text("Nothing to save. Skip with ⇧⌘⌫ if you're done.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.secondary)
+                    .lineLimit(1)
+                    .padding(.horizontal, Panel.inset)
+                    .padding(.top, 4)
+                    .transition(.opacity)
+            }
+
             HStack(spacing: 8) {
-                // Skip sits apart from Save, at the far left, and takes a click, never ⌘⏎. Not
-                // white either: white is the button a key presses. The box offers Undo after it.
-                button("Skip") { model.skipPrompt(pending.id) }
-                Spacer()
-                // With every line left out, Save would be a skip, so only Skip is offered.
-                if !model.savesNothing {
-                    button("Save", hint: "⌘⏎", primary: true) { model.savePrompt(pending.id) }
-                        .keyboardShortcut(.return, modifiers: .command)
+                // Skip sits apart from Save, at the far left, on ⇧⌘⌫, never ⌘⏎. Not ⌘⌫: the caret
+                // is always in a line, where that deletes to the line's start. Not white either:
+                // the white button is the one you mean to press. The box offers Undo after it.
+                button("Skip", hint: "⇧⌘⌫") { model.skipPrompt(pending.id) }
+                    .keyboardShortcut(.delete, modifiers: [.command, .shift])
+                // ⌥⏎ on the line you're on, so including one never needs the mouse. It says
+                // what it will do to that line. A blank line isn't a line yet, so not until it
+                // has text.
+                if let line = currentLine, !line.isBlank {
+                    let action = line.included ? "Leave out" : "Include"
+                    button(action, hint: "⌥⏎", label: "\(action): \(line.text)") { toggle(line.id) }
+                        .keyboardShortcut(.return, modifiers: .option)
                 }
+                Spacer()
+                // Claude couldn't draft it (offline, busy): once that's passed, try once more.
+                if pending.draftFailed == true {
+                    button("Draft again", hint: "⌘R") { model.draftAgain(pending.id) }
+                        .keyboardShortcut("r", modifiers: .command)
+                }
+                // With every line left out or blank, Save would be a skip: it stays in place,
+                // dimmed, and ⌘⏎ goes to the hidden button below, which says so.
+                button("Save", hint: "⌘⏎", primary: true) { model.savePrompt(pending.id) }
+                    .keyboardShortcut(model.savesNothing ? nil : KeyboardShortcut(.return, modifiers: .command))
+                    .disabled(model.savesNothing)
+                    .opacity(model.savesNothing ? 0.4 : 1)
             }
             .padding(.horizontal, Panel.inset)
             .padding(.top, 8)
             .padding(.bottom, 12 + BubbleShape.tail)
-            // ⌥⏎ on the line you're editing, so including one never needs the mouse.
             .background {
-                Button("") { toggleFocused() }.keyboardShortcut(.return, modifiers: .option).hidden()
+                // ⌘Z takes back a save still showing its Undo, or the skip still in its grace,
+                // onto this card. Only once the line you're in has no typing of its own to undo,
+                // and only then at all, so ⌘Z otherwise stays the line's.
+                if model.skipping != nil || model.flash?.undo != nil {
+                    Button("") { if !Self.undoTyping() { model.undoInBox() } }.keyboardShortcut("z", modifiers: .command).hidden()
+                }
+                // ⌘⏎ out of habit with nothing to save: say so, and how to skip, rather than skip.
+                if model.savesNothing {
+                    Button("") {
+                        NSSound.beep()
+                        model.announce("Nothing to save. Skip with Shift Command Delete.")
+                        withAnimation(spring) { nothingToSave = true }
+                    }
+                    .keyboardShortcut(.return, modifiers: .command).hidden()
+                }
+                // ⌘, opens Settings here too, as it does in the box (Jarvis has no menu bar).
+                Button("") { model.openSettings() }.keyboardShortcut(",", modifiers: .command).hidden()
+                Button("") { AppDelegate.quit() }.keyboardShortcut("q", modifiers: .command).hidden()
             }
         }
         .frame(width: Panel.width)
@@ -1132,11 +1365,18 @@ private struct MeetingCard: View {
         .onExitCommand(perform: model.closeReview)
         .onAppear(perform: focusFirstLine)
         .onChange(of: model.promptFocus, focusFirstLine)
-        .onChange(of: focused) { caretToEnd() }
+        .onChange(of: focused) { _, line in
+            if let line { current = line }
+            prepareEditor()
+        }
+        // Any change to the lines (or another prompt) is the next thing, so the note goes.
+        .onChange(of: model.lines) { withAnimation(spring) { nothingToSave = false } }
     }
 
-    private func toggleFocused() {
-        if let focused { toggle(focused) }
+    /// Undoes typing in the focused line, if it has any. False when there's none to undo.
+    private static func undoTyping() -> Bool {
+        guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.undoManager?.canUndo == true else { return false }
+        return NSApp.sendAction(Selector(("undo:")), to: nil, from: nil)
     }
 
     private func toggle(_ id: DraftLine.ID) {
@@ -1156,68 +1396,71 @@ private struct MeetingCard: View {
         VStack(alignment: .leading, spacing: Self.lineGap) {
             ForEach(Array(model.lines.enumerated()), id: \.element.id) { index, line in
                 // The checkbox and label sit on a wrapped line's first row, not its middle.
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                // The checkbox sits in the glyph column, under the header's waveform and above
+                // "Add a line"'s plus, so the line's text starts where the title does.
+                // A blank line isn't a line yet: it shows unticked, whatever it'll be once typed.
+                let ticked = line.included && !line.isBlank
+                HStack(alignment: .firstTextBaseline, spacing: GlyphColumn.spacing) {
                     Button { toggle(line.id) } label: {
                         // Square, like a macOS checkbox; the round check means "saved" elsewhere.
-                        Image(systemName: line.included ? "checkmark.square.fill" : "square")
+                        Image(systemName: ticked ? "checkmark.square.fill" : "square")
                             .font(.system(size: 16))
-                            .foregroundStyle(line.included ? Color.ink : Color.secondary)
+                            .foregroundStyle(ticked ? Color.ink : Color.secondary)
                             .contentTransition(.symbolEffect(.replace))
+                            // Laid out one text line tall, on the line's own box, so it never
+                            // pads a line; the target is bigger than the glyph (24pt), as a
+                            // checkbox's label would give.
+                            .frame(width: GlyphColumn.width, height: Self.lineHeight)
+                            .contentShape(Rectangle().inset(by: -4))
+                            .alignmentGuide(.firstTextBaseline) { _ in Self.font.ascender }
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(line.text.isEmpty ? "Include new line" : "Include \(line.text)")
-                    .accessibilityValue(line.included ? "on" : "off")
-                    .accessibilityAddTraits(.isToggle)
-                    // Long lines wrap in full so you can read them. Capped, an overflowing field
-                    // scrolls inside itself and draws over the gap to the next line; the list's
-                    // own scroll view caps the height instead. ⏎ moves down the lines, and on
-                    // the last one adds another; ⌘⏎ saves.
+                    // A real checkbox to VoiceOver, so its state is read once: "checked".
+                    .accessibilityRepresentation {
+                        Toggle(line.isBlank ? "Include new line" : "Include \(line.text)",
+                               isOn: Binding { ticked } set: { _ in toggle(line.id) })
+                    }
+                    // Long lines wrap in full so you can read them, and the field is as tall as
+                    // its text (see `prepareEditor` for why that holds while typing). Uncapped,
+                    // so the list's own scroll view caps the height rather than the field
+                    // scrolling inside itself. ⏎ moves down the lines, and on the last one adds
+                    // another; ⌘⏎ saves.
                     TextField(line.kind == .todo ? "Todo" : "Decision", text: text(of: line), prompt: Text(line.kind == .todo ? "New todo" : "New decision"), axis: .vertical)
                         .lineLimit(1...)
-                        .fixedSize(horizontal: false, vertical: true)
                         .textFieldStyle(.plain)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .focused($focused, equals: line.id)
                         .onSubmit { next(after: line.id) }
-                        .foregroundStyle(Color.ink.opacity(line.included ? 1 : Self.leftOut))
+                        .foregroundStyle(Color.ink.opacity(line.included ? 1 : leftOut))
                         .accessibilityHint(line.alreadyTracked ? "Already on your list. Goes to the \(line.destination) if included" : "Goes to the \(line.destination)")
-                    // The line you're on says what ⌥⏎ will do to it, after where it goes: "Today's
-                    // note" alone read as "⌥⏎ sends it there". Every row keeps the hint's room, so
-                    // labels don't shift as focus moves. An overlay, so the capsule never makes the
-                    // line taller than its text.
+                    // Where it goes, at the panel's inset like Save. Secondary even when left out:
+                    // the dimmed text already says it's off, and 11pt must stay readable.
                     Text(line.label)
                         .font(.system(size: 11))
-                        .foregroundStyle(line.included ? Color.secondary : Color.ink.opacity(Self.leftOut))
-                        .padding(.trailing, Self.hintWidth + 8)
-                        .overlay(alignment: .trailing) {
-                            Button { toggle(line.id) } label: {
-                                HStack(spacing: 4) {
-                                    Text(line.included ? "Leave out" : "Include")
-                                    Text("⌥⏎").keyHint()
-                                }
-                                .font(.system(size: 11))
-                                .frame(width: Self.hintWidth, height: 20)
-                                .background(Capsule().fill(Color.pill))
-                                .overlay(Capsule().strokeBorder(Color.edge))
-                            }
-                            .buttonStyle(GlassButton())
-                            .opacity(focused == line.id ? 1 : 0)
-                            .allowsHitTesting(focused == line.id)
-                        }
+                        .foregroundStyle(Color.secondary)
                         .accessibilityHidden(true)
                 }
                 .id(line.id)
-                .frame(minHeight: Self.lineHeight)
                 .padding(.horizontal, Panel.inset)
                 .stagger(index)
             }
         }
     }
 
+    /// A meeting with nothing proposed says why above its lines: nothing came out of the call,
+    /// or Claude couldn't draft it at all.
+    private var reason: String? {
+        guard pending.proposedNothing else { return nil }
+        return pending.draftFailed == true
+            ? "Couldn't draft this call. Read it (⌘O) and add todos here, draft it again (⌘R), or skip."
+            : "Nothing came out of this call. Add a todo, or skip."
+    }
+
     private func next(after id: DraftLine.ID) {
         guard let index = model.lines.firstIndex(where: { $0.id == id }) else { return }
         if model.lines.indices.contains(index + 1) {
             focused = model.lines[index + 1].id
-        } else if !model.lines[index].text.trimmingCharacters(in: .whitespaces).isEmpty {
+        } else if !model.lines[index].isBlank {
             model.addLine()
             focused = model.lines.last?.id
         }
@@ -1225,13 +1468,32 @@ private struct MeetingCard: View {
 
     private func focusFirstLine() {
         focused = model.lines.first?.id
-        caretToEnd()
+        prepareEditor()
     }
 
+    /// Readies the focused line's editor, on every move between lines.
+    ///
     /// A field selects all its text when it takes focus, so the first key you pressed would
-    /// replace the todo. Put the caret at the end instead, on every move between lines.
-    private func caretToEnd() {
-        DispatchQueue.main.async { (NSApp.keyWindow?.firstResponder as? NSTextView)?.moveToEndOfDocument(nil) }
+    /// replace the todo: put the caret at the end instead.
+    ///
+    /// A field is sized, and drawn when it isn't focused, by its cell, but typed into through a
+    /// field editor that AppKit makes about a point wider than the cell's text area. Text that
+    /// nearly fills the width then wraps one row sooner in the cell than in the editor, so the
+    /// focused line drew a row short of its height. Insetting the editor's text container to
+    /// the cell's text area gives both one width, so a line wraps the same focused or not and
+    /// is always as tall as it draws. Leaving the card puts the inset back, in case the window
+    /// shares its editor with the capture box.
+    private func prepareEditor() {
+        DispatchQueue.main.async {
+            guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
+            if focused != nil, let field = editor.delegate as? NSTextField, let cell = field.cell {
+                let textArea = cell.titleRect(forBounds: field.bounds).width
+                editor.textContainerInset = NSSize(width: max(0, (editor.bounds.width - textArea) / 2), height: 0)
+            } else {
+                editor.textContainerInset = .zero
+            }
+            editor.moveToEndOfDocument(nil)
+        }
     }
 }
 
@@ -1240,8 +1502,21 @@ private enum Control {
     static let height: CGFloat = 26
 }
 
-/// A capsule button. `hint` names the key that presses it.
-private func button(_ title: String, hint: String? = nil, primary: Bool = false, action: @escaping () -> Void) -> some View {
+/// What to do about a failure, under its headline: body size in Secondary Ink, as an answer's
+/// detail is body size, up to three lines and selectable so a path or command can be copied.
+private func failureDetail(_ text: String) -> some View {
+    Text(text)
+        .font(.system(size: 13))
+        .foregroundStyle(Color.secondary)
+        .lineLimit(3)
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+        .stagger(1)
+}
+
+/// A capsule button. `hint` names the key that presses it; `label` is what VoiceOver hears when
+/// the title alone doesn't say what it acts on.
+private func button(_ title: String, hint: String? = nil, label: String? = nil, primary: Bool = false, action: @escaping () -> Void) -> some View {
     Button(action: action) {
         HStack(spacing: 6) {
             Text(title).font(.system(size: 13, weight: primary ? .semibold : .regular))
@@ -1255,7 +1530,7 @@ private func button(_ title: String, hint: String? = nil, primary: Bool = false,
     }
     .buttonStyle(GlassButton(primary: primary))
     // The key hint is for sighted keyboard use; VoiceOver hears the name.
-    .accessibilityLabel(title)
+    .accessibilityLabel(label ?? title)
 }
 
 // MARK: Apps
@@ -1433,10 +1708,19 @@ private struct CaptureField: NSViewRepresentable {
     let onCancel: () -> Void
     /// ⌘Z with nothing typed; returns false when there's nothing for it to undo.
     let onUndo: () -> Bool
+    /// ⌘.: stops Claude; returns false when nothing is running.
+    let onStop: () -> Bool
+    /// ⌥⌘Z: Undo Last Change, however old.
+    let onUndoLast: () -> Void
+    /// ⌘, as in any Mac app.
+    let onSettings: () -> Void
 
     final class Field: NSTextField {
         var onFocus: () -> Void = {}
         var onUndo: () -> Bool = { false }
+        var onStop: () -> Bool = { false }
+        var onUndoLast: () -> Void = {}
+        var onSettings: () -> Void = {}
         /// A status ("Choose a vault") sits over the empty field, and the caret would draw at its
         /// first letter. The window's field editor is shared with the meeting card's lines, so the
         /// caret comes back whenever the box stops editing.
@@ -1482,14 +1766,29 @@ private struct CaptureField: NSViewRepresentable {
             return became
         }
 
-        /// ⌘X, ⌘C, ⌘V, ⌘A and ⌘Z come from an app's Edit menu, and Jarvis has no menu bar, so the
-        /// field handles them itself.
+        /// ⌘X, ⌘C, ⌘V, ⌘A, ⌘Z, ⌘. (Stop), ⌥⌘Z (Undo Last Change) and ⌘, (Settings) come from an
+        /// app's menus, and Jarvis has no menu bar, so the field handles them itself.
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            guard currentEditor() != nil, flags == .command || flags == [.command, .shift] else {
+            guard currentEditor() != nil, [.command, [.command, .shift], [.command, .option]].contains(flags) else {
                 return super.performKeyEquivalent(with: event)
             }
             let key = event.charactersIgnoringModifiers?.lowercased()
+            if flags == [.command, .option] {
+                guard key == "z" else { return super.performKeyEquivalent(with: event) }
+                onUndoLast()
+                return true
+            }
+            if key == ",", flags == .command {
+                onSettings()
+                return true
+            }
+            // A non-activating panel never hands ⌘Q to the menu bar, so the field quits itself.
+            if key == "q", flags == .command {
+                AppDelegate.quit()
+                return true
+            }
+            if key == ".", flags == .command, onStop() { return true }
             // Only once there's nothing of your own typing to undo.
             if key == "z", flags == .command, stringValue.isEmpty, currentEditor()?.undoManager?.canUndo != true, onUndo() { return true }
             let action: Selector? = switch key {
@@ -1526,11 +1825,16 @@ private struct CaptureField: NSViewRepresentable {
         field.setAccessibilityPlaceholderValue(status ?? placeholder)
         field.onFocus = onFocus
         field.onUndo = onUndo
+        field.onStop = onStop
+        field.onUndoLast = onUndoLast
+        field.onSettings = onSettings
         field.hidesCaret = status != nil && text.isEmpty
         if field.stringValue != text { field.stringValue = text }
         field.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [
             .foregroundColor: NSColor.fieldPlaceholder,
             .font: NSFont.systemFont(ofSize: 13),
+            // A running ask's text, quoted, keeps both its ends.
+            .paragraphStyle: Self.middleTruncating,
         ])
         if context.coordinator.focusCount != focusCount {
             context.coordinator.focusCount = focusCount
@@ -1541,6 +1845,12 @@ private struct CaptureField: NSViewRepresentable {
             }
         }
     }
+
+    private static let middleTruncating: NSParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingMiddle
+        return style
+    }()
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -1574,3 +1884,4 @@ private struct CaptureField: NSViewRepresentable {
         }
     }
 }
+

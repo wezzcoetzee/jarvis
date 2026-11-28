@@ -4,18 +4,21 @@ import SwiftUI
 
 /// The Downloads fan, like the macOS Dock's: clicking the tile fans the newest files up and off
 /// to the right, and turns the tile into a close button. A click anywhere else or esc closes it
-/// too, and the round arrow at the top opens the folder. It gets a window of its own because it
-/// reaches past the Dock's edges.
+/// too, and the round arrow at the top opens the folder. The fan has the keyboard while open, so
+/// ↑ ↓ move a highlight up and down the rows and ⏎ opens the highlighted one. It gets a window of
+/// its own because it reaches past the Dock's edges.
 @MainActor
 final class DownloadsStack {
     private let panel = FanPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     private var monitors: [Any] = []
     private var closedAt = Date.distantPast
-    private let motion = FanMotion()
+    private let state = FanState()
+    /// What each row opens, bottom up: a file, or nil for the folder.
+    private var targets: [URL?] = []
     /// Told when the fan opens or closes, so the tile can show its close button.
     var onChange: (Bool) -> Void = { _ in }
     /// Open, and not on its way back into the tile.
-    var isShown: Bool { panel.isVisible && motion.open }
+    var isShown: Bool { panel.isVisible && state.open }
 
     init() {
         panel.level = .statusBar
@@ -25,6 +28,7 @@ final class DownloadsStack {
         panel.becomesKeyOnlyIfNeeded = true
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         panel.onCancel = { [weak self] in self?.close() }
+        panel.onKey = { [weak self] in self?.handle($0) }
         // Clicking anywhere else takes the keyboard back, in any app. Unlike watching for those
         // clicks, that needs no permission.
         NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
@@ -41,10 +45,10 @@ final class DownloadsStack {
 
         let files = AppShelf.newestDownloads()
         let fits = max(1, Int((room - Fan.row) / Fan.row) - 1)
-        let fan = Fan(files: Array(files.prefix(fits)), more: max(0, files.count - fits), motion: motion) { [weak self] url in
-            NSWorkspace.shared.open(url ?? AppShelf.downloadsFolder)
-            self?.close()
-        }
+        let shown = Array(files.prefix(fits))
+        targets = shown.map(Optional.some) + [nil]
+        state.selected = nil
+        let fan = Fan(files: shown, more: max(0, files.count - fits), state: state) { [weak self] in self?.open($0) }
         let hosting = FirstClickHostingView(rootView: fan)
         let size = hosting.fittingSize
         hosting.frame = CGRect(origin: .zero, size: size)
@@ -58,7 +62,7 @@ final class DownloadsStack {
         panel.displayIfNeeded()
         // Open only once the closed fan has been laid out at its real size. Otherwise the
         // window settling into place animates too, which shows on the first open after launch.
-        DispatchQueue.main.async { [weak self] in self?.motion.open = true }
+        DispatchQueue.main.async { [weak self] in self?.state.open = true }
 
         let clicked: (NSEvent) -> Void = { [weak self] event in
             MainActor.assumeIsolated { if event.window !== self?.panel { self?.close() } }
@@ -70,17 +74,33 @@ final class DownloadsStack {
         onChange(true)
     }
 
+    /// A file, or the folder for nil.
+    private func open(_ url: URL?) {
+        NSWorkspace.shared.open(url ?? AppShelf.downloadsFolder)
+        close()
+    }
+
+    /// Rows count up from the tile, so ↑ goes to the next one. Nothing is highlighted until the
+    /// first arrow, so a click on the tile shows no highlight the pointer didn't put there.
+    private func handle(_ key: FanKey) {
+        switch key {
+        case .up: state.selected = min((state.selected ?? -1) + 1, targets.count - 1)
+        case .down: state.selected = max((state.selected ?? 1) - 1, 0)
+        case .enter: if let row = state.selected { open(targets[row]) }
+        }
+    }
+
     func close() {
         guard isShown else { return }
         monitors.forEach(NSEvent.removeMonitor)
         monitors = []
         closedAt = Date()
-        motion.open = false
+        state.open = false
         panel.ignoresMouseEvents = true
         onChange(false)
         DispatchQueue.main.asyncAfter(deadline: .now() + Fan.closing) { [weak self] in
             // Reopened meanwhile: that fan owns the window now.
-            guard let self, !self.motion.open else { return }
+            guard let self, !self.state.open else { return }
             self.panel.orderOut(nil)
             self.panel.contentView = nil
         }
@@ -88,16 +108,32 @@ final class DownloadsStack {
 }
 
 /// Takes the keyboard while open, like the macOS Dock's fan, so that taking it away closes the
-/// fan, and so esc reaches it.
+/// fan, and so esc and the arrow keys reach it.
 private final class FanPanel: NSPanel {
     var onCancel: () -> Void = {}
+    var onKey: (FanKey) -> Void = { _ in }
     override var canBecomeKey: Bool { true }
     override func cancelOperation(_ sender: Any?) { onCancel() }
+
+    override func keyDown(with event: NSEvent) {
+        switch (event.keyCode, event.isARepeat) {
+        case (126, _): onKey(.up)
+        case (125, _): onKey(.down)
+        // A held ⏎ repeats; it opens the file once.
+        case (36, false), (76, false): onKey(.enter)
+        case (36, true), (76, true): break
+        default: super.keyDown(with: event)
+        }
+    }
 }
 
+private enum FanKey { case up, down, enter }
+
 @MainActor @Observable
-private final class FanMotion {
+private final class FanState {
     var open = false
+    /// The row the keyboard has highlighted, counting up from the tile. The pointer takes it back.
+    var selected: Int?
 }
 
 /// Rows from the bottom up, each a label and an icon, rotating clockwise and drifting right the
@@ -105,7 +141,7 @@ private final class FanMotion {
 private struct Fan: View {
     let files: [URL]
     let more: Int
-    let motion: FanMotion
+    let state: FanState
     let open: (URL?) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -133,18 +169,22 @@ private struct Fan: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             ForEach(Array(files.enumerated()), id: \.element) { index, url in
-                place(index, FanRow(name: url.lastPathComponent, icon: .file(url)) { open(url) })
+                place(index, row(index, name: url.lastPathComponent, icon: .file(url), target: url))
             }
-            place(files.count, FanRow(name: more > 0 ? "\(more) More in Finder" : "Open in Finder", icon: .finder) { open(nil) })
+            place(files.count, row(files.count, name: more > 0 ? "\(more) More in Finder" : "Open in Finder", icon: .finder, target: nil))
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
+    }
+
+    private func row(_ index: Int, name: String, icon: FanRow.Icon, target: URL?) -> FanRow {
+        FanRow(name: name, icon: icon, selected: state.selected == index, onPointer: { state.selected = nil }) { open(target) }
     }
 
     /// Rows start stacked flat in the tile, just below the window, and spring up into place
     /// one after another, tilting as they go, with a little overshoot. Closing sweeps them back
     /// down, top row first. Each plays once, then everything holds still.
     private func place(_ index: Int, _ row: FanRow) -> some View {
-        let open = motion.open
+        let open = state.open
         // With Reduce Motion the rows fade in where they belong instead of flying up.
         let at = open || reduceMotion ? center(index) : CGPoint(x: center(0).x, y: center(0).y + 56)
         let motion: Animation = reduceMotion ? .easeOut(duration: 0.15) : open
@@ -165,6 +205,10 @@ private struct FanRow: View {
 
     let name: String
     let icon: Icon
+    /// Highlighted by the keyboard (see FanState.selected).
+    let selected: Bool
+    /// The pointer arrived, so the keyboard's highlight gives way to it.
+    let onPointer: () -> Void
     let action: () -> Void
     @State private var hovering = false
     @State private var thumbnail: NSImage?
@@ -174,13 +218,16 @@ private struct FanRow: View {
             Text(name)
                 .truncationMode(.middle)
                 // The same tag as an icon's name on hover.
-                .nameTag(highlighted: hovering)
+                .nameTag(highlighted: hovering || selected)
                 // Long names shorten in the middle; the pill hugs the rest.
                 .frame(maxWidth: 270, alignment: .trailing)
             image.frame(width: 46, height: 46)
         }
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
+        .onHover {
+            hovering = $0
+            if $0 { onPointer() }
+        }
         .onTapGesture(perform: action)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(name)

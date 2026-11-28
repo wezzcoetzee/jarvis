@@ -162,7 +162,10 @@ final class VaultSettings {
     /// Vault-relative; nil when meetings are off.
     private(set) var meetings: String?
     private(set) var folders: [MeetingFolder] = []
-    /// Why the last change didn't take, under the rows.
+    /// The vault folder is there. False when it moved or was deleted since it was chosen.
+    private(set) var ready = true
+    /// Why the last change didn't take, under the rows; or why the rows couldn't load at all
+    /// (an unreadable config.json), in their place.
     private(set) var error: String?
     /// A change landed, so the meeting watcher should start again with it.
     @ObservationIgnored var onChange: () -> Void = {}
@@ -173,8 +176,21 @@ final class VaultSettings {
     /// On every show, so an old error doesn't linger.
     func load() async {
         error = nil
-        guard let status = try? JSONDecoder().decode(SetupStatus.self, from: await Jarvis.run(["setup"], timeout: 30)) else { return }
+        let status: SetupStatus
+        do {
+            let data = try await Jarvis.run(["setup"], timeout: 30)
+            guard let decoded = try? JSONDecoder().decode(SetupStatus.self, from: data) else {
+                throw Jarvis.Failure(errorDescription: "Jarvis couldn't read its settings")
+            }
+            status = decoded
+        } catch {
+            // The rows would show settings that may no longer hold, so the error takes their place.
+            vault = nil
+            self.error = Self.explain(error)
+            return
+        }
         vault = status.vault
+        ready = status.ready
         vaultLabel = status.vaultLabel
         vaults = status.vaults
         meetings = status.meetings
@@ -196,20 +212,27 @@ final class VaultSettings {
                 onChange()
                 await load()
             } catch {
-                self.error = [error.localizedDescription, (error as? Jarvis.Failure)?.detail].compactMap(\.self).joined(separator: ". ")
+                self.error = Self.explain(error)
             }
         }
+    }
+
+    /// The CLI's headline and its next step, as one line.
+    private static func explain(_ error: Error) -> String {
+        [error.localizedDescription, (error as? Jarvis.Failure)?.detail].compactMap(\.self).joined(separator: ". ")
     }
 }
 
 @MainActor
 final class SettingsWindow {
     private let preferences: Preferences
+    private let model: DockModel
     private let vaultSettings = VaultSettings()
     private var window: NSWindow?
 
-    init(preferences: Preferences, onConfigChange: @escaping () -> Void = {}) {
+    init(preferences: Preferences, model: DockModel, onConfigChange: @escaping () -> Void = {}) {
         self.preferences = preferences
+        self.model = model
         vaultSettings.onChange = onConfigChange
     }
 
@@ -221,7 +244,7 @@ final class SettingsWindow {
             // Otherwise the window stays on the Space it first opened in (another desktop or a
             // full-screen app), and opening Jarvis from anywhere else sends you back there.
             window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-            window.contentView = NSHostingView(rootView: SettingsView(preferences: preferences, vault: vaultSettings))
+            window.contentView = NSHostingView(rootView: SettingsView(preferences: preferences, model: model, vault: vaultSettings).fitted)
             window.center()
             self.window = window
         }
@@ -249,6 +272,7 @@ private final class SettingsPanel: NSWindow {
 
 private struct SettingsView: View {
     @Bindable var preferences: Preferences
+    let model: DockModel
     let vault: VaultSettings
 
     var body: some View {
@@ -268,11 +292,19 @@ private struct SettingsView: View {
                     Text("Jarvis also runs the meeting watcher, so leave this on to catch every meeting.")
                 }
             }
-            KeysSection()
+            KeysSection(hotKeyTaken: model.hotKeyTaken)
         }
         .formStyle(.grouped)
         .frame(width: 420)
-        .fixedSize()
+    }
+
+    /// As tall as the list, unless that's taller than the display: then it scrolls, so the
+    /// bottom of the Keys list is never cut off. Unproposed, the Form reports its content's
+    /// height, and the frame caps that, so the window never has blank bands around the list.
+    var fitted: some View {
+        body
+            .frame(maxHeight: (NSScreen.main?.visibleFrame.height ?? 800) - 60)
+            .fixedSize()
     }
 }
 
@@ -317,8 +349,16 @@ private struct VaultSection: View {
     }
 
     var body: some View {
-        // Once loaded, so the menus never show an empty choice.
-        if settings.vault != nil { rows }
+        // Once loaded, so the menus never show an empty choice. A load that failed says why.
+        if settings.vault != nil {
+            rows
+        } else if let error = settings.error {
+            Section { errorLine(error) }
+        }
+    }
+
+    private func errorLine(_ error: String) -> some View {
+        Text(error).font(.callout).foregroundStyle(.red)
     }
 
     private var rows: some View {
@@ -334,6 +374,7 @@ private struct VaultSection: View {
             } label: {
                 Text("Vault")
                 Text(settings.vaultLabel).lineLimit(1).truncationMode(.head)
+                if !settings.ready { Text("Can't find this folder. Move it back, or choose another.") }
             }
             Picker(selection: meetingsChoice) {
                 // The count is in the line under "Meetings", so the button stays a folder name.
@@ -348,37 +389,87 @@ private struct VaultSection: View {
                 Text("Meetings")
                 Text(meetingsDetail)
             }
-            if let error = settings.error {
-                Text(error).font(.callout).foregroundStyle(.red)
-            }
+            if let error = settings.error { errorLine(error) }
         }
         .pickerStyle(.menu)
     }
 }
 
 /// Every key the Dock answers to, in one place: on screen they only show while the box has them.
+/// Keep in step with README "Using it".
 private struct KeysSection: View {
-    private static let keys = [
-        ("Open or close the box, from anywhere", "⌥Space"),
-        ("Ask Jarvis", "⏎"),
-        ("Add to your Inbox as is", "⌘⏎"),
-        ("Pick a note, or an app above Ask", "↑ ↓"),
-        ("Clear, then close", "⎋"),
-        ("Undo a save or skip, or bring back what ⎋ cleared", "⌘Z"),
-        ("Open an answer's notes", "⌘1 to ⌘3"),
-        ("Edit a failed request", "⌘E"),
-        ("Include or leave out a meeting line", "⌥⏎"),
-        ("Save a meeting prompt", "⌘⏎"),
+    /// Another app owns ⌥Space, so it can't open the box (DockModel.hotKeyRegistered).
+    let hotKeyTaken: Bool
+
+    private struct KeyGroup {
+        let title: String
+        let keys: [(key: String, does: String)]
+    }
+
+    private static let groups = [
+        KeyGroup(title: "Capture box", keys: [
+            ("⌥Space", "Open the capture box, or close it when empty"),
+            ("⏎", "Ask Jarvis"),
+            ("⌘⏎", "Add to Inbox as is"),
+            ("↑ ↓", "Move through the sheet"),
+            ("esc", "Clear the box, then close it"),
+            ("⌘Z", "Undo, or bring back cleared text"),
+            ("⌥⌘Z", "Undo the last change, however old"),
+            ("⌘.", "Stop the running ask"),
+            ("⏎", "Empty box: open the meeting or paused pill"),
+            ("⌘,", "Settings"),
+            ("⌘Q", "Quit, once work in progress finishes"),
+        ]),
+        KeyGroup(title: "Answers", keys: [
+            ("⏎", "Done, Next, Reply or Try again"),
+            ("esc", "Dismiss the answer"),
+            ("⌘E", "Edit a failed ask"),
+            ("⌘1 to ⌘3", "Open the answer's notes"),
+        ]),
+        KeyGroup(title: "Meeting prompt", keys: [
+            ("⏎", "Next line"),
+            ("⌥⏎", "Include or leave out the line"),
+            ("⌘⏎", "Save"),
+            ("⇧⌘⌫", "Skip"),
+            ("⌘O", "Open the call in Obsidian"),
+            ("⌘R", "Draft again, when Claude couldn't"),
+            ("⌘Z", "Undo typing, then a save or skip"),
+            ("esc", "Close and leave it waiting"),
+        ]),
+        KeyGroup(title: "Downloads", keys: [
+            ("↑ ↓", "Move through the files"),
+            ("⏎", "Open the file"),
+            ("esc", "Close the fan"),
+        ]),
     ]
 
     var body: some View {
         // One tight list rather than a row each, so the window still fits a small display.
         Section("Keys") {
-            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 5) {
-                ForEach(Self.keys, id: \.0) { does, key in
+            Grid(alignment: Alignment(horizontal: .leading, vertical: .firstTextBaseline), horizontalSpacing: 14, verticalSpacing: 5) {
+                ForEach(Self.groups, id: \.title) { group in
                     GridRow {
-                        Text(key).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
-                        Text(does)
+                        Text(group.title)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .gridCellColumns(2)
+                            .padding(.top, group.title == Self.groups.first?.title ? 0 : 6)
+                    }
+                    // By place: a key can do two things in one group (⏎ asks, and opens a card).
+                    ForEach(Array(group.keys.enumerated()), id: \.offset) { _, entry in
+                        let (key, does) = entry
+                        let taken = key == "⌥Space" && hotKeyTaken
+                        let detail = taken ? "Taken by another app. Free it there, then open Jarvis again." : does
+                        GridRow {
+                            // VoiceOver reads the pair as one element: the key's cell carries both.
+                            Text(key)
+                                .foregroundStyle(.secondary)
+                                .gridColumnAlignment(.trailing)
+                                .accessibilityLabel("\(key), \(detail)")
+                            Text(detail)
+                                .foregroundStyle(taken ? Color.failed : Color.primary)
+                                .accessibilityHidden(true)
+                        }
                     }
                 }
             }

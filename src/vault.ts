@@ -1,6 +1,13 @@
 import { join } from "node:path";
-import { layout, paths } from "./config";
-import { readText, writeAtomic } from "./files";
+import { layout, paths, tilde } from "./config";
+import { isFolder, readText, writeAtomic } from "./files";
+
+/** Throws unless the vault folder exists. A write would otherwise quietly create it, in the wrong place. */
+export async function requireVault(): Promise<void> {
+  if (!(await isFolder(paths.vault))) {
+    throw new Error(`Can't find your vault at ${tilde(paths.vault)}`, { cause: "Move it back, or choose it again in Settings." });
+  }
+}
 
 const PLACEHOLDER = "_(nothing yet)_";
 

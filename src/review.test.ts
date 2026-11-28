@@ -27,6 +27,10 @@ test("an untouched draft round-trips without the comments", () => {
   });
 });
 
+test("a checkbox or decision: left with its text deleted is dropped", () => {
+  expect(parseDraft("[ ]\n- [ ] \ndecision:\nkept")).toEqual({ todos: ["kept"], decisions: [] });
+});
+
 test("lines typed by hand are todos; AppleScript's \\r separators are handled", () => {
   expect(parseDraft("- [ ] one\rtwo\r\rDecision: three")).toEqual({
     todos: ["one", "two"],

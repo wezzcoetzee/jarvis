@@ -34,6 +34,7 @@ final class AppShelf {
     @ObservationIgnored private var pollTimer: Timer?
     @ObservationIgnored private var newestDownload: URL?
     @ObservationIgnored private var downloadsWatcher: DispatchSourceFileSystemObject?
+    @ObservationIgnored private var downloadsRefresh: Task<Void, Never>?
     @ObservationIgnored private let trash = try? FileManager.default.url(for: .trashDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
     /// Off for screenshots, so only the pinned apps show, never whatever happens to be running.
     @ObservationIgnored private let showsRunning: Bool
@@ -135,7 +136,10 @@ final class AppShelf {
                     running: app
                 )
             }
-        apps = config.pinned.compactMap(installed) + others
+        // One tile per id: two copies of an app (`open -n`) share a bundle id, and a hand-edited
+        // or macOS-seeded pin list can repeat one. ForEach and the badges are keyed by it.
+        var ids = Set<String>()
+        apps = (config.pinned.compactMap(installed) + others).filter { ids.insert($0.id).inserted }
         refreshBadges()
     }
 
@@ -148,17 +152,25 @@ final class AppShelf {
         if badges != self.badges { self.badges = badges }
     }
 
-    static let downloadsFolder = Jarvis.downloadsDir
+    nonisolated static let downloadsFolder = Jarvis.downloadsDir
 
     /// Newest first, by when each file landed in Downloads: the macOS Dock's default.
-    static func newestDownloads() -> [URL] {
+    nonisolated static func newestDownloads() -> [URL] {
+        downloads().sorted { $0.added > $1.added }.map(\.url)
+    }
+
+    /// Just the newest, for the tile, without sorting a folder that may hold thousands of files.
+    nonisolated private static func newestDownload() -> URL? {
+        downloads().max { $0.added < $1.added }?.url
+    }
+
+    nonisolated private static func downloads() -> [(url: URL, added: Date)] {
         let keys: Set<URLResourceKey> = [.addedToDirectoryDateKey, .creationDateKey]
         let urls = (try? FileManager.default.contentsOfDirectory(at: downloadsFolder, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles])) ?? []
-        func added(_ url: URL) -> Date {
+        return urls.map { url in
             let values = try? url.resourceValues(forKeys: keys)
-            return values?.addedToDirectoryDate ?? values?.creationDate ?? .distantPast
+            return (url, values?.addedToDirectoryDate ?? values?.creationDate ?? .distantPast)
         }
-        return urls.map { ($0, added($0)) }.sorted { $0.1 > $1.1 }.map(\.0)
     }
 
     /// The tile shows the newest download, like a stack in the macOS Dock, so it follows the
@@ -168,17 +180,24 @@ final class AppShelf {
         let folder = Darwin.open(Self.downloadsFolder.path, O_EVTONLY)
         guard folder >= 0 else { return }
         let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: folder, eventMask: .write, queue: .main)
-        source.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.refreshDownloads() } }
+        // A download lands as a burst of writes (the partial file, its rename, the quarantine
+        // flag), so the folder is listed once they settle.
+        source.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.refreshDownloads(after: .milliseconds(500)) } }
         source.setCancelHandler { Darwin.close(folder) }
         source.resume()
         downloadsWatcher = source
     }
 
-    private func refreshDownloads() {
-        let newest = Self.newestDownloads().first
-        guard places.isEmpty || newest != newestDownload else { return }
-        newestDownload = newest
-        buildPlaces()
+    /// Lists the folder off the main thread, so a big Downloads never holds up the Dock.
+    private func refreshDownloads(after delay: Duration = .zero) {
+        downloadsRefresh?.cancel()
+        downloadsRefresh = Task {
+            guard (try? await Task.sleep(for: delay)) != nil else { return }
+            let newest = await Task.detached(priority: .utility) { AppShelf.newestDownload() }.value
+            guard !Task.isCancelled, places.isEmpty || newest != newestDownload else { return }
+            newestDownload = newest
+            buildPlaces()
+        }
     }
 
     private func refreshTrash() {
@@ -251,17 +270,29 @@ final class AppShelf {
     private static func loadConfig() -> Config {
         if let data = try? Data(contentsOf: configURL) {
             if let config = try? JSONDecoder().decode(Config.self, from: data) { return config }
-            // A hand edit gone wrong. Keep it, rather than overwrite it on the next pin.
-            let kept = configURL.appendingPathExtension("invalid")
-            try? FileManager.default.removeItem(at: kept)
-            try? FileManager.default.moveItem(at: configURL, to: kept)
-            NSLog("Jarvis: dock.json isn't valid; moved it to \(kept.lastPathComponent) and started again")
+            // A hand edit gone wrong. Keep it, rather than overwrite it on the next pin, and keep
+            // any kept before it too: an earlier one may be the only copy of a hand-made list.
+            let kept = configURL.appendingPathExtension("invalid-\(Int(Date().timeIntervalSince1970))")
+            do {
+                try FileManager.default.moveItem(at: configURL, to: kept)
+                NSLog("Jarvis: dock.json isn't valid; moved it to \(kept.lastPathComponent) and started again")
+            } catch {
+                // Couldn't keep it, so don't save over it either: this launch runs on the macOS
+                // Dock's apps, and the file waits to be fixed.
+                NSLog("Jarvis: dock.json isn't valid and couldn't be moved aside: \(error)")
+                return seeded()
+            }
         }
-        let kept = (UserDefaults(suiteName: "com.apple.dock")?.array(forKey: "persistent-apps") as? [[String: Any]] ?? [])
-            .compactMap { ($0["tile-data"] as? [String: Any])?["bundle-identifier"] as? String }
-        let config = Config(pinned: ["com.apple.finder"] + kept.filter { $0 != "com.apple.finder" })
+        let config = seeded()
         save(config)
         return config
+    }
+
+    /// The apps kept in the macOS Dock, Finder first as it always is there.
+    private static func seeded() -> Config {
+        let kept = (UserDefaults(suiteName: "com.apple.dock")?.array(forKey: "persistent-apps") as? [[String: Any]] ?? [])
+            .compactMap { ($0["tile-data"] as? [String: Any])?["bundle-identifier"] as? String }
+        return Config(pinned: ["com.apple.finder"] + kept.filter { $0 != "com.apple.finder" })
     }
 
     private func save() {
