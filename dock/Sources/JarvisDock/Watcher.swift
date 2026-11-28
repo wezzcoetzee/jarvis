@@ -5,11 +5,12 @@ import Foundation
 /// stopping it (see `watch` in src/main.ts).
 ///
 /// A watcher that keeps dying means meeting prompts have stopped. `onProblem` hears why, in the
-/// CLI's own words, so the Dock can say "Meetings paused"; and hears nil once a run has stayed
-/// up long enough to count as working again.
+/// CLI's own words (its `error:` line, and the `detail:` line on what to do, if any), so the Dock
+/// can say "Meetings paused"; and hears nil once a run has stayed up long enough to count as
+/// working again.
 @MainActor
 final class Watcher {
-    var onProblem: (String?) -> Void = { _ in }
+    var onProblem: (_ reason: String?, _ detail: String?) -> Void = { _, _ in }
     private var process: Process?
     private var stopping = false
     private var relaunch: DispatchWorkItem?
@@ -24,7 +25,13 @@ final class Watcher {
     private static let heartbeat = Jarvis.stateDir.appending(path: "watch-heartbeat")
     /// A run that's still going after this long is working.
     private static let healthy: TimeInterval = 10
+    /// The first relaunch comes this soon; each one after a run that didn't last waits twice as
+    /// long, up to `maxRetryDelay`, so a vault that's gone for hours isn't a Bun launch every 5 s.
     private static let retryDelay: TimeInterval = 5
+    private static let maxRetryDelay: TimeInterval = 5 * 60
+    private var retries = 0
+    /// watch.log starts again past this, at a launch. Only the current run's lines are ever read.
+    private static let maxLog: UInt64 = 1_000_000
 
     /// Safe to call again: first run calls it once a vault is chosen.
     func start() {
@@ -50,6 +57,7 @@ final class Watcher {
         guard !stopping else { return }
         relaunch?.cancel()
         relaunch = nil
+        retries = 0
         if let process {
             restarting = true
             process.terminate()
@@ -69,6 +77,11 @@ final class Watcher {
         if let output = try? FileHandle(forWritingTo: log) {
             // Where this run's output starts, so its error is never an older run's.
             logStart = output.seekToEndOfFile()
+            // `truncate` leaves the offset where it was, which the watcher would write from.
+            if logStart > Self.maxLog, (try? output.truncate(atOffset: 0)) != nil {
+                try? output.seek(toOffset: 0)
+                logStart = 0
+            }
             process.standardOutput = output
             process.standardError = output
         }
@@ -84,12 +97,13 @@ final class Watcher {
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.healthy) { [weak self, weak process] in
                 MainActor.assumeIsolated {
                     guard let self, let process, process.isRunning, self.process === process else { return }
-                    self.onProblem(nil)
+                    self.retries = 0
+                    self.onProblem(nil, nil)
                 }
             }
         } catch {
             NSLog("Jarvis: couldn't start the meeting watcher: \(error)")
-            onProblem("Couldn't start the meeting watcher: \(error.localizedDescription)")
+            onProblem("Couldn't start the meeting watcher", error.localizedDescription)
             scheduleRelaunch()
         }
     }
@@ -103,14 +117,19 @@ final class Watcher {
             restarting = false
             return launch()
         }
-        if failed { onProblem(lastError() ?? "The meeting watcher keeps stopping") }
+        if failed {
+            let problem = lastError() ?? (reason: "The meeting watcher keeps stopping", detail: nil)
+            onProblem(problem.reason, problem.detail)
+        }
         scheduleRelaunch()
     }
 
     private func scheduleRelaunch() {
         let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.launch() } }
         relaunch = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.retryDelay, execute: work)
+        let delay = min(Self.retryDelay * pow(2, Double(retries)), Self.maxRetryDelay)
+        retries += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     private func checkStall() {
@@ -119,16 +138,25 @@ final class Watcher {
         let stuck = Date().timeIntervalSince(beat) > Self.stall
         guard stuck != stalled else { return }
         stalled = stuck
-        onProblem(stuck ? "Meetings haven't been checked for a few minutes. Look for a macOS prompt about your vault's folder; it may be on another display." : nil)
+        if stuck {
+            onProblem("Meetings haven't been checked for a few minutes", "Look for a macOS prompt about your vault's folder; it may be on another display.")
+        } else {
+            onProblem(nil, nil)
+        }
     }
 
-    /// The last `error:` line the run that just ended wrote: the CLI's one line on what went wrong.
-    private func lastError() -> String? {
+    /// The last `error:` line the run that just ended wrote, the CLI's one line on what went
+    /// wrong, and the `detail:` line under it, if any.
+    private func lastError() -> (reason: String, detail: String?)? {
         guard let handle = try? FileHandle(forReadingFrom: Jarvis.watchLog) else { return nil }
         defer { try? handle.close() }
         let end = (try? handle.seekToEnd()) ?? 0
         try? handle.seek(toOffset: max(logStart, end > 4096 ? end - 4096 : 0))
         let tail = String(decoding: handle.readDataToEndOfFile(), as: UTF8.self)
-        return tail.split(separator: "\n").last { $0.hasPrefix("error: ") }.map { String($0.dropFirst(7)) }
+        let lines = tail.split(separator: "\n")
+        guard let index = lines.lastIndex(where: { $0.hasPrefix("error: ") }) else { return nil }
+        // The CLI writes its `detail:` straight after the `error:` it explains.
+        let detail = lines.dropFirst(index + 1).first.flatMap { $0.hasPrefix("detail: ") ? $0 : nil }
+        return (String(lines[index].dropFirst(7)), detail.map { String($0.dropFirst(8)) })
     }
 }

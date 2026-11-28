@@ -33,6 +33,7 @@ final class DockPanelController {
     /// Revealed because something arrived; stays up until the pointer has been over it.
     private var sticky = false
     private var hideTimer: Timer?
+    private var unstick: DispatchWorkItem?
     private var shrinkTimer: Timer?
     private var monitors: [Any] = []
     /// Where DockView last laid out each icon, in the panel, top-left origin.
@@ -83,6 +84,7 @@ final class DockPanelController {
             if app.id == "downloads" { self?.openStack() } else { shelf.open(app) }
         }
         model.onFinish = { [weak self] in self?.yieldFocus() }
+        model.onOpenSettings = openSettings
         NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.model.lostFocus()
@@ -234,11 +236,17 @@ final class DockPanelController {
     private func reveal(sticky: Bool = false) {
         if sticky {
             self.sticky = true
-            // Like an app bouncing in the Dock: it gets your attention, then gives up.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
-                self?.sticky = false
-                self?.pointerMoved()
+            // Like an app bouncing in the Dock: it gets your attention, then gives up. A newer
+            // request starts the ten seconds again, so an older one can't cut it short.
+            unstick?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.sticky = false
+                    self?.pointerMoved()
+                }
             }
+            unstick = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: work)
         }
         hideTimer?.invalidate()
         guard !shown else { return }
@@ -278,6 +286,9 @@ final class DockPanelController {
         withObservationTracking { _ = preferences.autoHide } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
+                // Auto-hide sits on the display's edge, otherwise above the system Dock, so a
+                // Dock that's already up moves; `reveal()` does nothing for one that's shown.
+                if self.shown { self.panel.setFrame(self.frame(shown: true), display: true) }
                 if self.autohide {
                     self.pointerMoved()
                 } else {

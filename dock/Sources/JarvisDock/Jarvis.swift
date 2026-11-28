@@ -47,31 +47,71 @@ enum Jarvis {
         let process = Process()
         process.executableURL = URL(filePath: command[0])
         process.arguments = Array(command.dropFirst()) + args
+        let stop = Stop()
         if let timeout {
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if process.isRunning { process.terminate() } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { stop.stop(timedOut: true) }
         }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 // The pipe reads block, so keep them off Swift's cooperative thread pool.
                 DispatchQueue.global().async {
-                    continuation.resume(with: Result { try collect(process, input: input, timeout: timeout, onStep: onStep) })
+                    continuation.resume(with: Result { try collect(process, stop: stop, input: input, onStep: onStep) })
                 }
             }
         } onCancel: {
-            if process.isRunning { process.terminate() }
+            stop.stop()
         }
     }
 
-    private static func collect(_ process: Process, input: String?, timeout: TimeInterval?, onStep: (@MainActor (String) -> Void)?) throws -> Data {
-        let started = Date()
+    private static let tookTooLong = Failure(errorDescription: "Took too long", detail: "Check for a macOS prompt about your vault's folder; it may be on another display.")
+
+    /// Stops a run for its timeout or a cancelled Task. Either can come before the process has
+    /// started (a search superseded while still queued), so starting and stopping share a lock.
+    private final class Stop: @unchecked Sendable {
+        private let lock = NSLock()
+        private var process: Process?
+        private var stopped = false
+        private var stoppedForTimeout = false
+        var timedOut: Bool { lock.withLock { stoppedForTimeout } }
+
+        /// Starts the process, unless it was stopped first.
+        func start(_ process: Process) throws -> Bool {
+            try lock.withLock {
+                guard !stopped else { return false }
+                try process.run()
+                self.process = process
+                return true
+            }
+        }
+
+        /// Only counts if it stops something: a timer that fires as a run ends isn't a timeout.
+        func stop(timedOut: Bool = false) {
+            lock.withLock {
+                if let process {
+                    guard process.isRunning else { return }
+                    process.terminate()
+                }
+                stopped = true
+                stoppedForTimeout = stoppedForTimeout || timedOut
+            }
+        }
+    }
+
+    private static func collect(_ process: Process, stop: Stop, input: String?, onStep: (@MainActor (String) -> Void)?) throws -> Data {
         let out = Pipe(), err = Pipe(), stdin = Pipe()
         process.standardOutput = out
         process.standardError = err
         process.standardInput = stdin
-        try process.run()
+        guard try stop.start(process) else { throw stop.timedOut ? tookTooLong : CancellationError() }
 
-        if let input { stdin.fileHandleForWriting.write(Data(input.utf8)) }
-        try stdin.fileHandleForWriting.close()
+        // On its own thread, so a big input can't block before the readers below start, and with
+        // SIGPIPE off for this pipe: a CLI that exits before reading it is an error, not a crash.
+        let writer = stdin.fileHandleForWriting
+        _ = fcntl(writer.fileDescriptor, F_SETNOSIGPIPE, 1)
+        DispatchQueue.global().async {
+            if let input { try? writer.write(contentsOf: Data(input.utf8)) }
+            try? writer.close()
+        }
 
         // stderr is read as it arrives, on its own thread, so steps show up while stdout waits.
         var errors = Data()
@@ -96,10 +136,7 @@ enum Jarvis {
         stderrDone.wait()
         process.waitUntilExit()
 
-        // Stopped by the timeout, not by a cancelled search.
-        if process.terminationReason == .uncaughtSignal, let timeout, Date().timeIntervalSince(started) >= timeout {
-            throw Failure(errorDescription: "Took too long", detail: "Check for a macOS prompt about your vault's folder; it may be on another display")
-        }
+        if stop.timedOut { throw tookTooLong }
         guard process.terminationStatus == 0 else {
             // The CLI reports failures as an `error: ...` line, and maybe a `detail: ...` line.
             let lines = String(decoding: errors, as: UTF8.self).split(separator: "\n")
@@ -176,6 +213,9 @@ struct Vault: Decodable, Identifiable, Equatable {
 /// vaults Obsidian knows.
 struct SetupStatus: Decodable {
     let ready: Bool
+    /// A vault is chosen, whether or not its folder is there: not ready but configured is a vault
+    /// that went missing (an unmounted drive at login), not a first run. Older CLIs leave it out.
+    let configured: Bool?
     /// The vault Jarvis uses, whether or not it's there.
     let vault: String
     /// The same, from `~`, as Settings shows it.
@@ -210,6 +250,13 @@ struct AskResult: Decodable {
     /// A note Claude opened because the full answer was too long for the bubble.
     let open: String?
     let changed: [String]
+
+    /// The notes the bubble links to (⌘1 to ⌘3): the answer's own, then the note holding the
+    /// full answer, so "Open full answer" never opens a note the bubble didn't name.
+    var links: [Note] {
+        guard let open, !notes.contains(where: { $0.path == open }) else { return notes }
+        return notes + [Note(path: open, title: URL(filePath: open).deletingPathExtension().lastPathComponent)]
+    }
 }
 
 /// One request typed into the box, from Enter until it's dismissed, or a failure to show.
@@ -221,12 +268,16 @@ struct Activity: Identifiable {
     }
 
     /// What made it, and so what Try again repeats.
-    enum Origin {
+    enum Origin: Equatable {
         /// ⏎: Claude.
         case ask
         /// ⌘⏎: straight to the Inbox.
         case inbox
-        /// Something else failed (an undo, a meeting save); there's nothing to try again.
+        /// A meeting save that failed: Try again reopens the card on that prompt, edits kept.
+        case meeting(Pending.ID)
+        /// Draft again on a call Claude couldn't draft: Try again drafts it once more.
+        case draft(Pending.ID)
+        /// Something else failed (an undo, a skip); there's nothing to try again.
         case notice
     }
 
@@ -251,6 +302,19 @@ struct Activity: Identifiable {
 
     var isFailed: Bool {
         if case .failed = state { true } else { false }
+    }
+
+    /// It holds what you typed and offers Dismiss beside its white button (a failure, a
+    /// question, an answer too long to show), so Dismiss or esc keeps the text for ⌘Z.
+    var keepsText: Bool { editable && [.reply, .retry, .open].contains(primary) }
+
+    /// Its text is something you typed, so Edit can put it back in the box. A meeting's (a save
+    /// or a Draft again) is its title; its edits wait on the card.
+    var editable: Bool {
+        switch origin {
+        case .meeting, .draft: false
+        default: true
+        }
     }
 
     /// The bubble's white button, which ⏎ also presses.
@@ -279,13 +343,18 @@ struct Pending: Decodable, Identifiable {
     let noteName: String
     let meetingDate: String
     let proposal: Proposal
+    /// Every draft attempt failed, so the CLI queued the call with nothing proposed. Left out
+    /// when false.
+    let draftFailed: Bool?
     var id: String { noteName }
 
     var meetingDay: String { Day.name(meetingDate) ?? meetingDate }
+    /// Claude found nothing to follow up, or couldn't draft the call at all.
+    var proposedNothing: Bool { proposal.followUps.isEmpty && proposal.decisions.isEmpty }
 }
 
 /// One editable row of a queued prompt. Serialises to the CLI's draft line format.
-struct DraftLine: Identifiable {
+struct DraftLine: Identifiable, Equatable {
     enum Kind { case todo, decision }
 
     let id = UUID()
@@ -299,6 +368,8 @@ struct DraftLine: Identifiable {
     /// Where it's written if you include it: todos go to today's note (even an already-listed
     /// one), decisions to the Work Log.
     var destination: String { kind == .todo ? "Today's note" : "Work Log" }
+    /// Nothing typed yet: not a line until it has text, so it never saves or ticks.
+    var isBlank: Bool { text.trimmingCharacters(in: .whitespaces).isEmpty }
     /// One line of the CLI's draft format, so a pasted line break can't split it into more.
     var serialized: String {
         let line = text.split(whereSeparator: \.isNewline).joined(separator: " ")
@@ -319,5 +390,13 @@ struct DraftLine: Identifiable {
             + pending.proposal.decisions.map { DraftLine(kind: .decision, text: $0, included: true) }
             + followUps.filter(\.alreadyTracked).map(todo)
         return lines.isEmpty ? [blank] : lines
+    }
+}
+
+extension String {
+    /// Cut to `limit` characters with an ellipsis, so a pasted paragraph isn't read out in full
+    /// by VoiceOver or spread across a tooltip.
+    func clipped(_ limit: Int = 60) -> String {
+        count > limit ? prefix(limit - 1) + "…" : self
     }
 }

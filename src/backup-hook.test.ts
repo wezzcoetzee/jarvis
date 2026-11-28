@@ -57,6 +57,19 @@ test("edits are limited to Markdown notes outside config folders and agent files
   expect((await hook("Edit", {})).code).toBe(2);
 });
 
+test("a check that stalls is blocked at the deadline, not left to Claude Code's timeout", async () => {
+  // A payload that never finishes arriving stalls the hook the way a stuck cloud file does.
+  const proc = Bun.spawn(["bun", join(import.meta.dir, "main.ts"), "hook"], {
+    env: { ...process.env, JARVIS_RUN: RUN, JARVIS_HOOK_DEADLINE_MS: "500" },
+    stdin: "pipe",
+    stderr: "pipe",
+  });
+  proc.stdin.write('{"tool_name": "Edit", ');
+  const [code, reason] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
+  expect(code).toBe(2);
+  expect(reason).toContain("in time");
+});
+
 test("the first edit to a note backs it up for undo; new notes are recorded with no backup", async () => {
   expect((await hook("Edit", { file_path: "Daily.md" })).code).toBe(0);
   expect((await hook("Write", { file_path: "New.md" })).code).toBe(0);

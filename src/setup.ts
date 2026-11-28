@@ -1,7 +1,6 @@
 import { mkdir, readdir, stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative } from "node:path";
-import { configDir, expand, fold, layout, meetingsOff, paths, privateFolders } from "./config";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { configDir, expand, fold, layout, meetingsOff, paths, privateFolders, tilde, vaultChosen } from "./config";
 import { findClaude } from "./claude";
 import { isFolder, readJson, writeAtomic } from "./files";
 import { RECORDING } from "./meetings";
@@ -10,8 +9,6 @@ import { RECORDING } from "./meetings";
 const obsidianDir = expand(process.env.JARVIS_OBSIDIAN ?? "~/Library/Application Support/obsidian");
 
 type Vault = { name: string; path: string };
-
-const tilde = (path: string) => (path.startsWith(`${homedir()}/`) ? `~${path.slice(homedir().length)}` : path);
 
 type ObsidianJson = { vaults?: Record<string, { path?: unknown; ts?: number } | null> };
 
@@ -27,6 +24,8 @@ export async function listVaults(dir = obsidianDir): Promise<Vault[]> {
 
 /** For first run and Settings. A vault that moved counts as not ready, so it gets the same help. */
 export async function setupStatus(): Promise<{
+  /** A vault is chosen, whether or not its folder is there. `configured && !ready` is a vault that went missing, not first run. */
+  configured: boolean;
   ready: boolean;
   vault: string;
   vaultLabel: string;
@@ -35,6 +34,7 @@ export async function setupStatus(): Promise<{
   claude: boolean;
 }> {
   return {
+    configured: vaultChosen,
     ready: await isFolder(paths.vault),
     vault: paths.vault,
     vaultLabel: tilde(paths.vault),
@@ -45,6 +45,8 @@ export async function setupStatus(): Promise<{
 }
 
 const configFile = join(configDir, "config.json");
+
+export const NOT_A_FOLDER = "Choose a folder that exists.";
 
 /** Sets keys in config.json, keeping every other key and the file's permissions. */
 async function updateConfig(file: string, changes: Record<string, string | boolean>): Promise<void> {
@@ -59,8 +61,9 @@ async function updateConfig(file: string, changes: Record<string, string | boole
 }
 
 export async function chooseVault(folder: string, file = configFile): Promise<{ vault: string }> {
-  const vault = expand(folder);
-  if (!(await isFolder(vault))) throw new Error(`${folder} isn't a folder`);
+  // Absolute, so the CLI finds it again from whatever folder the Dock runs it in.
+  const vault = resolve(expand(folder));
+  if (!(await isFolder(vault))) throw new Error(`${folder} isn't a folder`, { cause: NOT_A_FOLDER });
   await updateConfig(file, { vault: tilde(vault) });
   return { vault };
 }
@@ -96,12 +99,15 @@ export async function meetingFolders(vault = paths.vault): Promise<MeetingFolder
 }
 
 /** Makes `folder` (in the vault, absolute or vault-relative) the meetings folder in config.json. */
-export async function chooseMeetings(folder: string, vault = paths.vault, file = configFile): Promise<{ meetings: string }> {
+export async function chooseMeetings(folder: string, vaultFolder = paths.vault, file = configFile): Promise<{ meetings: string }> {
+  const vault = resolve(expand(vaultFolder));
   const path = isAbsolute(expand(folder)) ? expand(folder) : join(vault, folder);
   const meetings = relative(vault, path) || ".";
-  if (meetings === ".." || meetings.startsWith("../") || isAbsolute(meetings)) throw new Error(`${folder} isn't in your vault`);
+  if (meetings === ".." || meetings.startsWith("../") || isAbsolute(meetings)) {
+    throw new Error(`${folder} isn't in your vault`, { cause: "Choose a folder inside your vault." });
+  }
   if (isPrivate(meetings)) throw new Error(`${meetings} is private to Jarvis`);
-  if (!(await isFolder(path))) throw new Error(`${folder} isn't a folder`);
+  if (!(await isFolder(path))) throw new Error(`${folder} isn't a folder`, { cause: NOT_A_FOLDER });
   await updateConfig(file, { meetings });
   return { meetings };
 }

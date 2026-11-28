@@ -18,7 +18,7 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "▸ Compiling the CLI"
-bun build "$ROOT/src/main.ts" --compile --outfile "$WORK/jarvis-cli" >/dev/null
+bun build "$ROOT/src/main.ts" --compile --define "process.env.JARVIS_VERSION=\"$VERSION\"" --outfile "$WORK/jarvis-cli" >/dev/null
 
 echo "▸ Building the Dock"
 swift build -c release --package-path "$ROOT/dock"

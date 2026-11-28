@@ -59,7 +59,12 @@ export async function saveFailures(failures: Failures): Promise<void> {
   await writeAtomic(failuresPath, JSON.stringify(failures, null, 2));
 }
 
-type Pending = { noteName: string; meetingDate: string; proposal: Proposal };
+/**
+ * A meeting prompt waiting in the Dock. `draftFailed` (read by the Dock, so its name is a
+ * contract) marks one Claude couldn't draft: the proposal is empty and the person adds lines by
+ * hand, or skips. It is left out when false.
+ */
+export type Pending = { noteName: string; meetingDate: string; proposal: Proposal; draftFailed?: true };
 
 const pendingPath = (noteName: string) => join(pendingDir, `${noteName}.json`);
 

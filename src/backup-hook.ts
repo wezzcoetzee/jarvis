@@ -7,7 +7,7 @@
 //   are covered by the `Read(./<private>/**)` deny rules `jarvis ask` passes in settings.
 import { lstat, realpath } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { expand, fold, layout, paths, pluginDirs, privateFolders } from "./config";
+import { expand, fold, layout, paths, pluginDirs, privateFolders, settings } from "./config";
 import { RECORDING } from "./meetings";
 import { backUp } from "./runs";
 
@@ -38,6 +38,8 @@ async function canonical(path: string): Promise<string> {
 }
 
 export async function hook(): Promise<void> {
+  // Fails closed on a stall too. Unref'd, so it only fires while a check is still waiting.
+  setTimeout(() => block("Jarvis couldn't check this in time. Look for a macOS prompt about the vault's folder."), settings.hookDeadlineMs).unref();
   try {
     const input = await Bun.stdin.json();
     const run = process.env.JARVIS_RUN;

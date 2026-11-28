@@ -21,7 +21,7 @@ ALL=(
   working working-two saved found answer question queue failed undone
   meeting-pill meeting-prompt downloads settings answer-keys narrow reply undo-skipped
   open-answer meeting-skip waiting first-run setup-ready paused paused-open skip-undo light
-  setup-meetings setup-no-claude open-app
+  setup-meetings setup-no-claude open-app light-meeting stop draft-failed
 )
 SCENES=("${@:-${ALL[@]}}")
 
@@ -47,14 +47,17 @@ for scene in $SCENES; do
   mv "$WORK/scene/vault/Daily/TODAY.md" "$WORK/scene/vault/Daily/$(date +%F).md"
   mkdir -p "$WORK/scene/state" "$WORK/scene/downloads"
   # Meeting prompts only where they're the subject, so the pill doesn't sit in every shot.
-  [[ $scene == meeting-* || $scene == skip-undo ]] && cp -R "$FIXTURES/state/pending" "$WORK/scene/state/"
+  [[ $scene == meeting-* || $scene == skip-undo || $scene == light-meeting ]] && cp -R "$FIXTURES/state/pending" "$WORK/scene/state/"
+  # A call Claude couldn't draft, queued on its own so the card shows its one empty line.
+  [[ $scene == draft-failed ]] && cp -R "$FIXTURES/state/draft-failed" "$WORK/scene/state/pending"
   # First run: no vault yet, and a made-up Obsidian that knows two. Every scene gets its own
   # Obsidian folder, so the CLI never reads the real list of vaults.
   mkdir -p "$WORK/scene/obsidian"
   vault="$WORK/scene/vault"
   if [[ $scene == first-run || $scene == setup-* || $scene == settings ]]; then
-    # Settings shows the vault in use; first run has none yet.
-    [[ $scene == settings ]] && vault="$WORK/scene/Documents/Personal" || vault="$WORK/scene/no-vault"
+    # Settings shows the vault in use. First run has none: an empty JARVIS_VAULT means unset,
+    # so `jarvis setup` reports it unconfigured (a set but missing one is a vault gone missing).
+    [[ $scene == settings ]] && vault="$WORK/scene/Documents/Personal" || vault=""
     mkdir -p "$WORK/scene/Documents" "$WORK/scene/OneDrive/Work/.obsidian"
     cp -R "$WORK/scene/vault" "$WORK/scene/Documents/Personal"
     print -r -- "{\"vaults\":{\"a\":{\"path\":\"$WORK/scene/Documents/Personal\",\"ts\":2},\"b\":{\"path\":\"$WORK/scene/OneDrive/Work\",\"ts\":1}}}" > "$WORK/scene/obsidian/obsidian.json"

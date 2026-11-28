@@ -2,8 +2,9 @@ import { z } from "zod";
 import { explain } from "./errors";
 import { runClaude } from "./claude";
 import { layout, owner, paths, pluginDirs, privateFolders } from "./config";
-import { prune, seal, undo } from "./runs";
-import { localDate } from "./vault";
+import { seal, startRun, undo } from "./runs";
+import { oneLine } from "./text";
+import { localDate, requireVault } from "./vault";
 
 const Answer = z.object({
   kind: z.enum(["saved", "found", "answer", "question"]),
@@ -40,11 +41,15 @@ const BROWSERS = new Set(["Google Chrome", "Brave Browser", "Microsoft Edge", "A
 /** The front tab of a Chromium browser. Needs a one-time Automation prompt, nothing more. */
 async function activeTab(app: string): Promise<string | null> {
   if (!BROWSERS.has(app)) return null;
-  const script = `tell application "${app}" to tell active tab of front window to return title & " | " & URL`;
+  const script = `tell application "${app}" to tell active tab of front window to return title & linefeed & URL`;
   const proc = Bun.spawn(["osascript", "-e", script], { stdout: "pipe", stderr: "ignore", timeout: 2000 });
   const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-  // A page title is written by whoever made the page, so keep it to one short line.
-  return code === 0 ? out.replace(/[\p{Cc}<>]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 200) : null;
+  if (code !== 0) return null;
+  // A page title is written by whoever made the page, so keep it to one short line. A URL has
+  // no raw newline, so the last one splits them whatever the title holds.
+  const text = out.trimEnd();
+  const split = text.lastIndexOf("\n");
+  return split === -1 ? oneLine(text, 200) : `${oneLine(text.slice(0, split), 150)} | ${oneLine(text.slice(split + 1), 200)}`;
 }
 
 function contextBlock(app: string | undefined, tab: string | null): string {
@@ -53,7 +58,8 @@ function contextBlock(app: string | undefined, tab: string | null): string {
     `Now: ${now.toLocaleString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })}`,
     `Today's Daily note: ${layout.daily}/${localDate(now)}.md`,
   ];
-  if (app) lines.push(`They were in: ${app}`);
+  // An app names itself, so it gets the same treatment as a page title.
+  if (app) lines.push(`They were in: ${oneLine(app, 100)}`);
   if (tab) lines.push(`Browser tab (page title | URL, from the web): ${tab}`);
   return `<context>\n${lines.join("\n")}\n</context>`;
 }
@@ -69,9 +75,27 @@ const hook = `${[...self, "hook"].map((part) => `"${part}"`).join(" ")} || exit 
 // would skip the backup hook. Edit and Write are the only ways to change a note.
 const TOOLS = "Read,Glob,Grep,Edit,Write,Skill";
 
+/**
+ * Asks Claude. SIGTERM or SIGINT (the Dock's Stop) stops Claude and takes the same road as any
+ * other failure: the run is sealed, undone, and the ask ends with `Stopped`.
+ */
 export async function ask(text: string, app?: string, onStep?: (step: string) => void) {
-  const runId = new Date().toISOString().replace(/[:.]/g, "-");
-  await prune().catch((error) => console.error(`couldn't clear old runs: ${error}`));
+  // First, so a missing vault says so, rather than failing later as a missing `claude` or file.
+  await requireVault();
+  const stop = new AbortController();
+  const abort = () => stop.abort();
+  process.once("SIGTERM", abort);
+  process.once("SIGINT", abort);
+  try {
+    return await askClaude(text, app, onStep, stop.signal);
+  } finally {
+    process.off("SIGTERM", abort);
+    process.off("SIGINT", abort);
+  }
+}
+
+async function askClaude(text: string, app: string | undefined, onStep: ((step: string) => void) | undefined, signal: AbortSignal) {
+  const runId = await startRun();
   const tab = app ? await activeTab(app) : null;
   const prompt = `${contextBlock(app, tab)}\n\n<request>\n${text}\n</request>`;
 
@@ -102,23 +126,27 @@ export async function ask(text: string, app?: string, onStep?: (step: string) =>
               "Edit(**/AGENTS.md)",
             ],
           },
-          hooks: { PreToolUse: [{ matcher: "Edit|Write|MultiEdit|Read|Grep|Glob", hooks: [{ type: "command", command: hook }] }] },
+          // A hook that times out lets the tool call through, so Claude Code's timeout (seconds)
+          // sits well past the hook's own deadline (`settings.hookDeadlineMs`), which blocks.
+          hooks: { PreToolUse: [{ matcher: "Edit|Write|MultiEdit|Read|Grep|Glob", hooks: [{ type: "command", command: hook, timeout: 60 }] }] },
         }),
       ],
       env: { JARVIS_RUN: runId },
       onStep,
+      signal,
     });
     const changed = await seal(runId);
     // "Saved" with nothing changed (a blocked write, a mislabel) would promise an Undo that has
     // nothing to undo, so it's only an answer.
     return { runId, ...answer, kind: answer.kind === "saved" && changed.length === 0 ? "answer" : answer.kind, changed };
   } catch (error) {
-    // A run that died part-way through shouldn't leave half its edits behind.
-    await seal(runId);
+    // A run that died part-way through shouldn't leave half its edits behind. Sealing can fail
+    // for the same reason the run did (the vault gone); undo still runs, and this error is kept.
+    await seal(runId).catch(() => []);
     const { restored } = await undo(runId).catch(() => ({ restored: [] as string[] }));
     // `explain` first, so a system error keeps its plain headline instead of becoming a plain Error.
-    const { message, detail: why } = explain(error);
-    const detail = [restored.length > 0 ? "Your notes were put back" : "", why ?? ""].filter(Boolean).join(". ");
+    const { message, detail: why } = signal.aborted ? { message: "Stopped", detail: undefined } : explain(error);
+    const detail = [restored.length > 0 ? "Your notes were put back." : "", why ?? ""].filter(Boolean).join(" ");
     throw new Error(message, { cause: detail || undefined });
   }
 }

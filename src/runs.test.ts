@@ -3,7 +3,34 @@ import { existsSync } from "node:fs";
 import { appendFile, mkdir, realpath, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { fold, paths, settings } from "./config";
-import { backUp, prune, runDir, seal, undo } from "./runs";
+import { backUp, describeUndo, formatRuns, prune, relativeWhen, runDir, seal, undo } from "./runs";
+
+test("runs say when in words for recent ones, line up in columns under a header, and undo reads as a sentence", () => {
+  const now = new Date(2026, 10, 28, 16, 0);
+  const at = (...args: [number, number, number, number]) => new Date(2026, ...args).getTime();
+  expect(relativeWhen(at(10, 28, 15, 46), now)).toBe("today 15:46");
+  expect(relativeWhen(at(10, 27, 9, 12), now)).toBe("yesterday 09:12");
+  expect(relativeWhen(at(10, 20, 9, 12), now)).toBe("2026-11-20");
+
+  const table = formatRuns(
+    [
+      { id: "2026-11-28T15-46-00-000Z", at: at(10, 28, 15, 46), changed: ["Inbox.md", "Work Log.md"], kept: false },
+      { id: "2026-11-20T09-12-00-000Z", at: at(10, 20, 9, 12), changed: ["Inbox.md"], kept: true },
+    ],
+    now,
+  );
+  expect(table).toBe(
+    [
+      "Run id                    When         Changed",
+      "2026-11-28T15-46-00-000Z  today 15:46  Inbox.md, Work Log.md",
+      "2026-11-20T09-12-00-000Z  2026-11-20   Inbox.md  (edited since)",
+    ].join("\n"),
+  );
+
+  expect(describeUndo({ restored: ["Inbox.md"], skipped: [] })).toBe("Put back Inbox.md");
+  expect(describeUndo({ restored: ["A.md", "B.md"], skipped: ["C.md"] })).toBe("Put back A.md, B.md\nKept C.md as is: edited since");
+  expect(describeUndo({ restored: [], skipped: ["C.md"] })).toBe("Kept C.md as is: edited since");
+});
 
 test("undoing one of two runs that edited the same note keeps the other's work", async () => {
   const note = join(await realpath(paths.vault), "Shared.md");

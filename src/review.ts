@@ -19,11 +19,10 @@ export function parseDraft(text: string): Capture {
   for (const raw of text.split(/\r\n|\r|\n/)) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;
-    if (line.toLowerCase().startsWith(DECISION)) {
-      capture.decisions.push(line.slice(DECISION.length).trim());
-    } else {
-      capture.todos.push(line.replace(/^(-\s*)?(\[ \]\s*)?/, ""));
-    }
+    const isDecision = line.toLowerCase().startsWith(DECISION);
+    const text = isDecision ? line.slice(DECISION.length).trim() : line.replace(/^(-\s*)?(\[ \]\s*)?/, "");
+    // A checkbox or `decision:` left with its text deleted is a dropped item, not an empty one.
+    if (text) (isDecision ? capture.decisions : capture.todos).push(text);
   }
   return capture;
 }
